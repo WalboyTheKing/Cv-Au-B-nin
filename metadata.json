@@ -1,0 +1,7 @@
+{
+  "name": "CV Pro Bénin",
+  "description": "Plateforme professionnelle de création, modification, gestion et téléchargement de CV adaptée au marché de l'emploi au Bénin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

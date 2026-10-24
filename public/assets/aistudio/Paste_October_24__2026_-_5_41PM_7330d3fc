@@ -1,0 +1,1193 @@
+# PROMPT MAÎTRE — DÉVELOPPEMENT D'UNE PLATEFORME DE CRÉATION DE CV PROFESSIONNELS AU BÉNIN
+
+## 1. RÔLE ET MISSION
+
+Tu es un développeur full-stack senior, architecte logiciel, expert UX/UI, cybersécurité, génération de documents PDF et intégration de paiements Mobile Money en Afrique de l'Ouest.
+
+Ta mission est de concevoir et développer une plateforme web professionnelle de création, modification, téléchargement et gestion de CV, inspirée des fonctionnalités générales des plateformes modernes de création de CV comme LiveCareer, mais avec une identité visuelle originale et une expérience adaptée aux besoins des utilisateurs du Bénin.
+
+Le produit doit être réellement fonctionnel, responsive, sécurisé, facile à utiliser et prêt à être déployé en production après configuration des services externes.
+
+Nom provisoire du projet : **CV Pro Bénin**.
+
+Ce nom doit être configurable afin que je puisse le remplacer ultérieurement par le nom définitif de mon entreprise.
+
+Langue principale : français.
+
+Pays cible pour la commercialisation : Bénin.
+
+Devise : franc CFA BCEAO (XOF), affiché en FCFA.
+
+Objectif : permettre à toute personne de créer un CV professionnel en quelques minutes, même sans expérience en informatique.
+
+IMPORTANT : avant toute modification, examine intégralement le projet existant, son architecture, ses dépendances, ses pages, ses composants, sa base de données, son système d'authentification et ses fonctionnalités. Si un projet existe déjà, conserve sa structure et améliore-le sans réécrire inutilement les parties fonctionnelles.
+
+Ne prétends jamais qu'une fonctionnalité est opérationnelle si elle ne l'est pas réellement.
+
+---
+
+## 2. RÈGLES ABSOLUES POUR PROTÉGER LE CODE
+
+Ces règles doivent être respectées pendant tout le développement.
+
+1. Commence par analyser le code existant et identifier les technologies utilisées.
+2. Établis une liste des fonctionnalités déjà opérationnelles, des bugs et des fonctionnalités manquantes.
+3. Ne supprime aucun composant, fichier, route, table ou fonctionnalité sans justification technique et validation lorsque cela risque d'affecter le projet.
+4. Ne remplace pas l'architecture existante par une nouvelle architecture sans nécessité démontrée.
+5. Conserve les fonctionnalités qui fonctionnent déjà.
+6. Ne modifie pas arbitrairement les noms des variables, fonctions, tables, colonnes, routes ou paramètres d'API.
+7. Ne mets jamais de clés secrètes, mots de passe, clés privées ou secrets de paiement dans le frontend.
+8. N'utilise pas de données fictives pour simuler une réussite de paiement en production.
+9. Ne supprime aucune donnée réelle de la base de données pendant les migrations.
+10. Ne désactive jamais l'authentification, les contrôles d'accès ou les validations pour contourner un problème.
+11. Avant chaque changement important, identifie les fichiers concernés et les risques de régression.
+12. Effectue des modifications petites, cohérentes et testables.
+13. Vérifie les imports, les dépendances, les types TypeScript, les erreurs de compilation et les routes après les changements.
+14. N'installe pas de bibliothèque inutile et ne mets pas à jour toutes les dépendances sans raison.
+15. N'expose jamais les informations personnelles des utilisateurs ni leurs CV à d'autres utilisateurs.
+16. N'affiche pas de faux avis clients, de fausses statistiques, de faux témoignages ou de fausses transactions.
+17. Si une clé API ou un compte marchand manque, prépare l'intégration et indique clairement ce qui reste à configurer. Ne prétends pas que les paiements réels sont actifs.
+
+À chaque étape, le projet doit rester dans un état cohérent et testable.
+
+---
+
+## 3. CONCEPTION GÉNÉRALE DU PRODUIT
+
+Créer une application web permettant de :
+
+- Créer un CV à partir d'un formulaire guidé.
+- Importer un CV existant et modifier son contenu.
+- Choisir parmi plusieurs modèles professionnels.
+- Prévisualiser le CV en temps réel.
+- Ajouter ou supprimer des sections.
+- Réorganiser les sections.
+- Modifier les couleurs, polices et styles autorisés par le modèle.
+- Enregistrer automatiquement le travail.
+- Reprendre un CV ultérieurement.
+- Télécharger le CV en PDF de qualité professionnelle.
+- Créer plusieurs CV dans un même compte selon les limites du forfait.
+- Consulter l'historique de ses CV.
+- Acheter un accès premium avec les moyens de paiement disponibles au Bénin.
+- Consulter ses paiements et son abonnement.
+- Gérer son compte et ses données personnelles.
+
+La plateforme doit fonctionner sur ordinateur, tablette et smartphone.
+
+Elle doit avoir une apparence professionnelle, moderne, rapide et rassurante.
+
+Ne reproduis pas exactement l'interface de LiveCareer. Crée une identité graphique originale.
+
+---
+
+## 4. PAGE D'ACCUEIL
+
+Créer une page d'accueil moderne avec les sections suivantes.
+
+### Barre de navigation
+
+- Logo de la plateforme.
+- Accueil.
+- Créer un CV.
+- Modèles de CV.
+- Importer un CV.
+- Tarifs.
+- Conseils CV.
+- Se connecter.
+- Créer mon CV.
+
+Sur mobile, utiliser un menu compact et fonctionnel.
+
+### Section principale
+
+Titre :
+
+« Créez un CV professionnel qui ouvre des portes. »
+
+Sous-titre :
+
+« Réalisez votre CV en quelques minutes, personnalisez votre présentation et téléchargez un document prêt à accompagner vos candidatures. Une solution pensée pour les talents du Bénin. »
+
+Boutons :
+
+- Créer mon CV.
+- Importer mon CV.
+- Découvrir les modèles.
+
+Ajouter une prévisualisation visuelle originale de plusieurs modèles de CV.
+
+Ne pas afficher de statistiques d'utilisateurs ou de taux de satisfaction non vérifiés.
+
+### Section des avantages
+
+Présenter les avantages suivants :
+
+- Création guidée.
+- Modèles professionnels.
+- Conseils de rédaction.
+- Prévisualisation en direct.
+- Export PDF.
+- Sauvegarde des documents.
+- Paiement local sécurisé pour les offres payantes accessibles au Bénin.
+
+### Section des modèles
+
+Présenter des aperçus de CV :
+
+- Classique.
+- Moderne.
+- Minimaliste.
+- Professionnel.
+- Étudiant.
+- Premier emploi.
+- Technicien.
+- Informatique.
+- Commercial.
+- Administration.
+- Enseignement.
+
+Chaque modèle possède un aperçu, une description et un bouton « Utiliser ce modèle ».
+
+### Section de fonctionnement
+
+Étape 1 : Choisissez un modèle.
+
+Étape 2 : Renseignez vos informations.
+
+Étape 3 : Personnalisez votre CV.
+
+Étape 4 : Prévisualisez et téléchargez votre document selon les conditions du forfait choisi.
+
+### Section tarifs
+
+Présenter clairement l'offre gratuite et les offres payantes, leurs limites, leur durée et leurs conditions.
+
+### Pied de page
+
+- À propos.
+- Contact.
+- FAQ.
+- Conditions générales d'utilisation.
+- Politique de confidentialité.
+- Politique de cookies.
+- Conditions de paiement et de remboursement.
+- Mentions légales.
+- Gestion des données personnelles.
+
+---
+
+## 5. CRÉATION DE CV : FONCTIONNALITÉ CENTRALE
+
+Créer un éditeur de CV guidé, ergonomique et réellement fonctionnel.
+
+L'utilisateur doit pouvoir avancer étape par étape et revenir aux étapes précédentes sans perdre ses données.
+
+### Étape 1 : Informations personnelles
+
+Champs disponibles :
+
+- Prénom.
+- Nom.
+- Intitulé professionnel.
+- Numéro de téléphone.
+- Adresse e-mail.
+- Ville.
+- Pays.
+- Adresse facultative.
+- Photo facultative.
+- Profil LinkedIn facultatif.
+- Portfolio ou site web facultatif.
+
+Ne demande que les informations utiles à la création du document.
+
+Ne rends pas obligatoire une photo, une date de naissance, un état matrimonial ou toute autre information non indispensable.
+
+### Étape 2 : Profil professionnel
+
+Proposer un champ de rédaction pour présenter le candidat en quelques phrases.
+
+Ajouter des suggestions de rédaction adaptées au métier, à l'expérience et à l'objectif professionnel.
+
+Les suggestions doivent être modifiables.
+
+Ne jamais inventer un diplôme, une expérience, une compétence, un employeur ou une certification à la place de l'utilisateur.
+
+### Étape 3 : Expériences professionnelles
+
+Permettre d'ajouter plusieurs expériences.
+
+Pour chaque expérience :
+
+- Poste occupé.
+- Nom de l'entreprise.
+- Ville et pays.
+- Date de début.
+- Date de fin.
+- Case « Poste actuel ».
+- Missions et responsabilités.
+- Réalisations professionnelles facultatives.
+
+Permettre de modifier, supprimer et réorganiser les expériences.
+
+### Étape 4 : Formation
+
+Permettre d'ajouter plusieurs formations.
+
+Champs :
+
+- Diplôme ou formation.
+- Établissement.
+- Ville et pays.
+- Date de début.
+- Date de fin.
+- Description facultative.
+- Statut : en cours ou terminé.
+
+Prévoir des exemples adaptés aux établissements et aux parcours éducatifs du Bénin, sans imposer un parcours particulier.
+
+### Étape 5 : Compétences
+
+Permettre d'ajouter des compétences techniques et professionnelles.
+
+Exemples de catégories :
+
+- Informatique.
+- Bureautique.
+- Développement web.
+- Maintenance informatique.
+- Gestion.
+- Communication.
+- Vente.
+- Langues.
+- Compétences transversales.
+
+Les catégories et suggestions doivent être configurables.
+
+Ne pas attribuer automatiquement un niveau de compétence non confirmé par l'utilisateur.
+
+### Étape 6 : Langues
+
+Pour chaque langue :
+
+- Nom de la langue.
+- Niveau déclaré par l'utilisateur.
+
+Exemples de niveaux : notions, intermédiaire, professionnel, courant.
+
+### Étape 7 : Sections supplémentaires
+
+Permettre d'ajouter selon les besoins :
+
+- Certifications.
+- Projets.
+- Stages.
+- Bénévolat.
+- Réalisations.
+- Publications.
+- Centres d'intérêt.
+- Permis de conduire.
+- Références professionnelles, facultatives.
+
+Toutes les sections doivent être facultatives et réorganisables.
+
+### Étape 8 : Design du CV
+
+L'utilisateur peut :
+
+- Changer de modèle.
+- Choisir une couleur d'accentuation.
+- Sélectionner une police parmi les polices disponibles.
+- Modifier la taille des caractères dans des limites lisibles.
+- Afficher ou masquer certaines sections.
+- Choisir une présentation adaptée à son profil.
+- Prévisualiser le résultat.
+
+Conserver une mise en page cohérente et professionnelle.
+
+### Étape 9 : Aperçu et validation
+
+Afficher une prévisualisation fidèle au PDF final.
+
+Prévoir :
+
+- Un aperçu paginé.
+- La détection des champs importants manquants.
+- La vérification des débordements.
+- La possibilité de revenir modifier les informations.
+- Une indication du nombre de pages.
+- Un contrôle de lisibilité.
+
+Ne jamais couper silencieusement une expérience, une formation ou une autre information pour faire tenir le CV sur une page.
+
+### Étape 10 : Téléchargement
+
+Générer un PDF propre, imprimable et sélectionnable par les outils de lecture de texte.
+
+Le document doit :
+
+- Respecter le format A4.
+- Utiliser des marges adaptées.
+- Conserver une typographie lisible.
+- Gérer correctement les accents français.
+- Éviter les textes coupés et les pages blanches inutiles.
+- Préserver les sections et l'ordre choisis.
+- Être compatible avec les usages de candidature.
+- Être testé sur plusieurs navigateurs et appareils.
+
+Si un export Word est proposé ultérieurement, il doit être réellement généré et testé. Ne présente pas une simple page HTML renommée en PDF ou en DOCX comme un véritable document exporté.
+
+---
+
+## 6. MODÈLES PROFESSIONNELS
+
+Créer une bibliothèque de modèles originaux.
+
+Chaque modèle doit posséder :
+
+- Un identifiant unique.
+- Un nom.
+- Une catégorie.
+- Une description.
+- Un aperçu.
+- Un style graphique.
+- Une configuration des sections.
+- Un statut actif ou inactif.
+- Une indication gratuite ou premium.
+
+Les modèles doivent être conçus pour les usages suivants :
+
+1. Premier emploi.
+2. Étudiant.
+3. Stage.
+4. Technicien.
+5. Développeur informatique.
+6. Administratif.
+7. Commercial.
+8. Comptabilité.
+9. Enseignant.
+10. Management.
+11. Professionnel expérimenté.
+12. CV minimaliste.
+13. CV moderne.
+14. CV classique.
+15. CV sans photo.
+
+Ajouter ensuite d'autres modèles si cela améliore réellement la diversité.
+
+Tous les modèles ne doivent pas être de simples changements de couleur du même design. Ils doivent présenter de véritables variations de mise en page.
+
+Les modèles payants doivent être identifiés clairement avant leur sélection.
+
+---
+
+## 7. IMPORTATION D'UN CV EXISTANT
+
+Créer une fonctionnalité « Importer et modifier mon CV ».
+
+Formats à accepter en priorité :
+
+- PDF.
+- DOCX.
+
+Éventuellement, accepter le DOC si une solution compatible et sécurisée est disponible.
+
+Fonctionnement attendu :
+
+1. L'utilisateur sélectionne son fichier.
+2. Le système vérifie son format et sa taille.
+3. Le document est analysé.
+4. Les informations détectées sont présentées dans un formulaire éditable.
+5. L'utilisateur vérifie et corrige les données.
+6. Il choisit un modèle.
+7. Le CV est reconstruit dans l'éditeur.
+8. Il peut prévisualiser puis exporter le nouveau document.
+
+Ne considère pas l'importation comme réussie si le système ne fait que stocker le fichier original.
+
+La reconnaissance des informations doit gérer les documents dont la mise en page est complexe. Si une extraction automatique échoue, proposer une saisie manuelle plutôt que d'inventer des informations.
+
+Si une fonctionnalité OCR est nécessaire, prévoir son intégration de façon modulaire.
+
+Sécuriser les fichiers importés, limiter leur taille, vérifier leur type réel et empêcher l'exécution de contenus malveillants.
+
+---
+
+## 8. ASSISTANCE À LA RÉDACTION
+
+Ajouter une assistance à la rédaction des CV.
+
+Fonctionnalités :
+
+- Améliorer une phrase.
+- Corriger l'orthographe.
+- Reformuler une expérience professionnelle.
+- Proposer un résumé professionnel.
+- Adapter les formulations à un poste recherché.
+- Suggérer des compétences pertinentes à partir des informations fournies.
+- Améliorer la clarté et la concision.
+- Aider à rédiger une lettre de motivation, si cette fonctionnalité est ajoutée.
+
+L'assistance doit préserver la véracité des informations.
+
+Elle ne doit pas inventer des années d'expérience, des résultats chiffrés, des responsabilités ou des diplômes.
+
+Ne pas rendre l'IA obligatoire pour créer un CV.
+
+Si un fournisseur d'IA est utilisé, configurer sa clé exclusivement côté serveur, limiter les appels, gérer les erreurs et contrôler les coûts.
+
+Afficher clairement les fonctionnalités d'assistance incluses dans chaque forfait.
+
+Si aucune clé IA n'est configurée, les autres fonctionnalités de la plateforme doivent continuer à fonctionner.
+
+---
+
+## 9. AUTHENTIFICATION ET ESPACE PERSONNEL
+
+Créer les fonctionnalités suivantes :
+
+- Inscription par e-mail et mot de passe.
+- Connexion.
+- Déconnexion.
+- Vérification de l'adresse e-mail.
+- Réinitialisation du mot de passe.
+- Gestion du profil.
+- Suppression du compte.
+- Protection des pages privées.
+- Gestion des sessions.
+- Enregistrement automatique des CV.
+
+L'utilisateur doit pouvoir retrouver ses documents après une déconnexion et une nouvelle connexion.
+
+Créer un tableau de bord avec :
+
+- Mes CV.
+- Créer un nouveau CV.
+- Modifier un CV.
+- Dupliquer un CV.
+- Télécharger un CV.
+- Renommer un CV.
+- Supprimer un CV après confirmation.
+- Consulter mon forfait.
+- Consulter mes paiements.
+- Gérer mon compte.
+
+Un utilisateur ne doit jamais pouvoir consulter, modifier, supprimer ou télécharger le CV d'un autre utilisateur.
+
+Vérifier les autorisations côté serveur et au niveau de la base de données, pas seulement dans l'interface.
+
+---
+
+## 10. MODÈLE COMMERCIAL ET TARIFS EN FCFA
+
+Créer un système de forfaits administrables depuis le panneau d'administration.
+
+Utiliser les tarifs ci-dessous comme valeurs initiales de configuration, et non comme des prix définitifs imposés.
+
+### Offre GRATUITE
+
+Prix : 0 FCFA.
+
+Fonctionnalités possibles :
+
+- Création d'un CV.
+- Accès à une sélection de modèles gratuits.
+- Modification des informations.
+- Sauvegarde du CV.
+- Prévisualisation.
+- Export PDF selon les limites configurées.
+
+### Offre PREMIUM
+
+Prix initial proposé : 500 FCFA pour un accès de 7 jours.
+
+Fonctionnalités possibles :
+
+- Accès aux modèles premium.
+- Téléchargement de CV sans filigrane.
+- Plusieurs CV selon les limites définies.
+- Personnalisation avancée.
+- Assistance à la rédaction, si activée.
+
+### Offre PLUS
+
+Prix initial proposé : 1 000 FCFA pour un accès de 30 jours.
+
+Fonctionnalités possibles :
+
+- Accès aux modèles premium.
+- Plusieurs documents.
+- Modifications et téléchargements selon les limites définies.
+- Fonctionnalités avancées de personnalisation.
+- Assistance à la rédaction, si activée.
+
+Ces offres sont des exemples de départ. Tous les prix, durées, quotas, fonctionnalités et conditions doivent être modifiables dans l'administration.
+
+Ne promets jamais un accès illimité si le système impose des quotas.
+
+Avant tout paiement, afficher :
+
+- Le prix total en FCFA.
+- La durée de validité.
+- Les fonctionnalités incluses.
+- Les éventuelles limites.
+- Les conditions de renouvellement.
+- Les conditions de remboursement.
+- La date d'expiration prévue.
+
+Ne mets pas en place de renouvellement automatique payant sans consentement explicite.
+
+Le système doit gérer les statuts : actif, en attente, expiré, annulé et remboursé.
+
+---
+
+## 11. PAIEMENTS RÉSERVÉS AU BÉNIN
+
+Le paiement est destiné aux clients du Bénin.
+
+Les utilisateurs situés hors du Bénin peuvent consulter la plateforme, créer un compte et utiliser les fonctionnalités gratuites. Les offres payantes doivent être proposées uniquement lorsque le service est activé pour le Bénin, selon les règles commerciales définies.
+
+Ne bloque pas l'ensemble du site aux visiteurs étrangers.
+
+### Moyens de paiement à prévoir
+
+Étudier et préparer une intégration sécurisée de :
+
+- MTN Mobile Money Bénin.
+- Moov Money Bénin.
+- Un agrégateur de paiement local compatible avec ces moyens, par exemple FedaPay ou KKiaPay, après vérification de sa disponibilité, de ses conditions marchandes, de ses frais et de ses fonctionnalités actuelles.
+
+Ne suppose pas qu'un compte marchand est déjà disponible.
+
+Ne simule jamais une transaction réelle.
+
+### Fonctionnement du paiement
+
+1. L'utilisateur sélectionne un forfait.
+2. Le serveur récupère le prix depuis la configuration officielle des forfaits.
+3. Le système vérifie que l'offre payante est disponible au Bénin.
+4. L'utilisateur choisit un moyen de paiement pris en charge.
+5. Le serveur crée une transaction auprès du prestataire.
+6. L'utilisateur effectue le paiement via le parcours officiel du prestataire.
+7. Le prestataire transmet une notification serveur-à-serveur, appelée webhook, ou fournit un mécanisme équivalent de vérification.
+8. Le serveur vérifie l'authenticité de la notification et, si nécessaire, confirme la transaction auprès du prestataire.
+9. Le montant, la devise, la référence, le statut et le bénéficiaire sont vérifiés.
+10. L'accès premium est accordé uniquement après confirmation d'un paiement réussi.
+11. Le tableau de bord affiche la confirmation et la durée d'accès.
+12. Un reçu ou une preuve de transaction est mis à disposition selon les possibilités du prestataire.
+
+### Sécurité financière obligatoire
+
+- Ne jamais accorder un accès premium sur la seule base d'une redirection du navigateur.
+- Ne jamais faire confiance à un montant transmis uniquement par le frontend.
+- Vérifier le montant en FCFA côté serveur.
+- Vérifier la devise et la référence de la transaction.
+- Vérifier les signatures des webhooks selon la documentation officielle du prestataire.
+- Prévoir une protection contre les notifications répétées et les doubles paiements.
+- Garantir qu'une transaction validée ne soit traitée qu'une seule fois.
+- Enregistrer les erreurs de transaction sans exposer de données sensibles.
+- Prévoir la gestion des paiements en attente, échoués, annulés et remboursés.
+- Ne pas enregistrer de code PIN Mobile Money ni d'identifiants secrets du client.
+- Ne pas stocker de données bancaires sensibles.
+- Ne jamais exposer les clés secrètes dans le code frontend ou le dépôt public.
+
+### Restriction géographique
+
+Prévoir une configuration permettant d'activer les paiements pour le Bénin uniquement.
+
+Utiliser plusieurs éléments lorsque cela est nécessaire :
+
+- Pays configuré dans le profil.
+- Disponibilité du moyen de paiement.
+- Indicatif téléphonique béninois +229, lorsque pertinent.
+- Pays pris en charge par le prestataire.
+- Contrôles serveur complémentaires.
+
+L'adresse IP peut être un signal complémentaire, mais elle ne doit pas être la seule preuve de résidence ou de nationalité.
+
+Un numéro béninois ou une adresse IP béninoise ne prouve pas, à lui seul, la nationalité d'une personne. La règle commerciale doit porter sur l'éligibilité au service de paiement, pas sur une nationalité supposée.
+
+Prévoir un message clair lorsque les paiements ne sont pas disponibles dans un pays.
+
+Ne pas afficher un faux bouton « Paiement réussi » en mode test.
+
+---
+
+## 12. ADMINISTRATION
+
+Créer un panneau d'administration réservé aux administrateurs autorisés.
+
+Fonctionnalités :
+
+### Tableau de bord
+
+- Nombre de comptes.
+- Nombre de CV créés.
+- Nombre de comptes actifs.
+- Nombre d'abonnements actifs.
+- Nombre de paiements confirmés.
+- Chiffre d'affaires encaissé.
+- Répartition des forfaits.
+- Transactions en attente ou en erreur.
+
+Les indicateurs financiers doivent être calculés à partir des transactions confirmées. Distinguer les montants bruts des frais et remboursements lorsque les données sont disponibles.
+
+### Gestion des utilisateurs
+
+- Rechercher un compte.
+- Consulter son statut.
+- Voir son forfait.
+- Consulter les métadonnées nécessaires au support.
+- Suspendre un compte en cas de motif légitime.
+- Réactiver un compte.
+- Traiter les demandes de suppression selon la politique de conservation des données.
+
+Ne pas permettre aux administrateurs ordinaires de lire le contenu des CV sans autorisation spécifique et justification légitime.
+
+### Gestion des forfaits
+
+- Créer une offre.
+- Modifier un prix.
+- Modifier une durée.
+- Activer ou désactiver une offre.
+- Définir les quotas.
+- Associer les fonctionnalités à une offre.
+
+### Gestion des modèles
+
+- Ajouter un modèle.
+- Modifier ses métadonnées.
+- Activer ou désactiver un modèle.
+- Définir s'il est gratuit ou premium.
+
+### Gestion des paiements
+
+- Consulter les références.
+- Consulter les statuts.
+- Rechercher une transaction.
+- Consulter les événements techniques nécessaires.
+- Déclencher une vérification auprès du prestataire.
+- Gérer les remboursements uniquement par un mécanisme autorisé et traçable.
+
+Aucune action administrative sensible ne doit être accessible sans contrôle d'autorisation côté serveur.
+
+Journaliser les actions importantes des administrateurs.
+
+---
+
+## 13. TECHNOLOGIES ET ARCHITECTURE
+
+Commence par identifier la stack actuelle.
+
+Si aucun projet existant n'impose de choix, privilégie une architecture moderne et maintenable :
+
+### Frontend
+
+- React.
+- TypeScript.
+- Tailwind CSS.
+- Composants accessibles et réutilisables.
+- Gestion d'état adaptée à la complexité réelle.
+- Validation des formulaires.
+- Interface responsive.
+
+### Backend
+
+Choisir une solution cohérente avec le projet :
+
+- API serveur Node.js/TypeScript, ou
+- Fonctions serveur sécurisées de la plateforme choisie.
+
+Ne duplique pas inutilement les logiques métier dans plusieurs serveurs.
+
+### Base de données
+
+Si Supabase est déjà utilisé, conserve-le et configure :
+
+- PostgreSQL.
+- Supabase Auth.
+- Row Level Security.
+- Migrations versionnées.
+- Stockage privé pour les documents qui nécessitent un stockage distant.
+
+Sinon, choisir une base adaptée au projet existant.
+
+### Génération PDF
+
+Utiliser une solution qui permet un rendu fiable du CV, la gestion des polices, la pagination et un texte exploitable.
+
+Choisir la bibliothèque après avoir étudié la structure actuelle et les contraintes d'hébergement.
+
+### Organisation du code
+
+Séparer clairement :
+
+- L'interface.
+- Les composants du constructeur de CV.
+- La logique métier.
+- Les accès à la base de données.
+- Les paiements.
+- Les autorisations.
+- La génération des documents.
+- Les tests.
+
+Ne place jamais la logique d'attribution des abonnements uniquement dans un composant frontend.
+
+---
+
+## 14. STRUCTURE DE LA BASE DE DONNÉES
+
+Adapter cette proposition à la base existante. Ne pas recréer des tables si des équivalents fiables existent déjà.
+
+### Table profiles
+
+- id.
+- user_id.
+- first_name.
+- last_name.
+- country_code.
+- preferred_language.
+- created_at.
+- updated_at.
+
+### Table cvs
+
+- id.
+- user_id.
+- title.
+- template_id.
+- content_json.
+- created_at.
+- updated_at.
+
+Le champ content_json contient la structure validée du CV, et non du code exécutable.
+
+### Table cv_templates
+
+- id.
+- name.
+- slug.
+- description.
+- category.
+- preview_path.
+- is_premium.
+- is_active.
+- configuration_json.
+
+### Table plans
+
+- id.
+- name.
+- price_xof.
+- duration_days.
+- features_json.
+- quotas_json.
+- is_active.
+
+### Table subscriptions
+
+- id.
+- user_id.
+- plan_id.
+- status.
+- starts_at.
+- expires_at.
+- created_at.
+
+### Table payments
+
+- id.
+- user_id.
+- plan_id.
+- provider.
+- provider_reference.
+- amount_xof.
+- currency.
+- status.
+- confirmed_at.
+- created_at.
+
+Ne stocker que les données de paiement nécessaires au suivi et à la réconciliation.
+
+### Table payment_events
+
+- id.
+- payment_id.
+- provider_event_id.
+- event_type.
+- processing_status.
+- received_at.
+- processed_at.
+
+Ne pas stocker les secrets du prestataire dans cette table.
+
+### Table audit_logs
+
+- id.
+- actor_id.
+- action.
+- resource_type.
+- resource_id.
+- created_at.
+
+Limiter les informations personnelles enregistrées dans les journaux.
+
+Créer les clés étrangères, les index utiles, les contraintes d'intégrité et les règles de suppression appropriées.
+
+Les montants doivent être enregistrés en unités monétaires entières de FCFA lorsque le prestataire le permet.
+
+Prévoir des migrations réversibles lorsque cela est possible et des sauvegardes avant les changements risqués.
+
+---
+
+## 15. SÉCURITÉ ET CONFIDENTIALITÉ
+
+Les CV contiennent des informations personnelles. La protection des données est donc prioritaire.
+
+Mettre en place :
+
+- Authentification sécurisée.
+- Autorisations serveur.
+- Protection des routes privées.
+- Validation côté serveur.
+- Protection contre les injections SQL.
+- Protection contre les attaques XSS.
+- Protection CSRF lorsque le mécanisme d'authentification l'exige.
+- Limitation des tentatives de connexion et des abus.
+- Limitation des requêtes coûteuses.
+- Gestion sécurisée des sessions.
+- Contrôle strict des fichiers importés.
+- Liens de téléchargement temporaires lorsque nécessaire.
+- Accès privé aux documents.
+- Journalisation sans secrets.
+- Sauvegardes et procédure de restauration.
+- Suppression effective des données selon la politique de conservation.
+- Protection contre l'accès à un CV en modifiant simplement son identifiant dans l'URL.
+
+Avec Supabase, activer et tester les politiques RLS sur toutes les tables contenant des données privées.
+
+Ne jamais compter uniquement sur le masquage d'un bouton dans l'interface pour protéger une ressource.
+
+Prévoir les documents suivants :
+
+- Politique de confidentialité.
+- Conditions générales d'utilisation.
+- Politique de cookies si nécessaire.
+- Politique de conservation des données.
+- Conditions de paiement et de remboursement.
+
+Les documents juridiques doivent être adaptés à la législation applicable au Bénin et aux exigences du prestataire de paiement. Ne prétends pas qu'ils sont juridiquement validés sans vérification.
+
+---
+
+## 16. EXPÉRIENCE UTILISATEUR ET DESIGN
+
+Créer un design original avec les caractéristiques suivantes :
+
+- Interface moderne.
+- Navigation claire.
+- Typographie lisible.
+- Espacement cohérent.
+- Couleurs professionnelles.
+- Boutons clairement identifiables.
+- Icônes cohérentes.
+- Formulaires faciles à comprendre.
+- Indicateur de progression.
+- Prévisualisation du CV.
+- Messages de confirmation compréhensibles.
+- Gestion des états de chargement.
+- Messages d'erreur utiles.
+- Écrans vides avec une action suggérée.
+- Adaptation mobile.
+- Accessibilité clavier.
+- Contraste suffisant.
+
+La page du constructeur doit privilégier une disposition à trois zones sur grand écran :
+
+1. Navigation des étapes.
+2. Formulaire d'édition.
+3. Prévisualisation du CV.
+
+Sur mobile, adapter la présentation pour que l'édition et l'aperçu restent utilisables sans réduire excessivement les textes.
+
+Ne pas surcharger l'écran avec trop d'animations.
+
+Éviter les fenêtres publicitaires intrusives et les faux compteurs d'urgence.
+
+---
+
+## 17. SEO ET PERFORMANCE
+
+Prévoir :
+
+- Des titres de pages descriptifs.
+- Des descriptions adaptées.
+- Des URLs propres.
+- Une structure HTML sémantique.
+- Des pages publiques indexables.
+- Des aperçus sociaux.
+- Un sitemap.
+- Un fichier robots.txt adapté.
+- Des images optimisées.
+- Un chargement progressif des composants lourds.
+- Des polices optimisées.
+- Une gestion correcte des erreurs réseau.
+
+Ne jamais indexer les CV privés, les tableaux de bord, les pages de paiement privées ou les documents personnels.
+
+Les pages de création et de modification de CV doivent rester protégées.
+
+---
+
+## 18. TESTS OBLIGATOIRES
+
+Ne considère pas le projet terminé avant d'avoir exécuté les tests pertinents.
+
+### Tests du constructeur
+
+- Création d'un CV vide.
+- Création d'un CV complet.
+- Ajout et suppression d'une expérience.
+- Modification d'une formation.
+- Ajout de compétences.
+- Réorganisation des sections.
+- Changement de modèle.
+- Sauvegarde automatique.
+- Reprise après reconnexion.
+- Export PDF.
+- Gestion des caractères accentués.
+- Gestion d'un CV de plusieurs pages.
+- Contrôle des débordements.
+- Vérification des champs facultatifs.
+
+### Tests d'authentification
+
+- Inscription.
+- Connexion.
+- Déconnexion.
+- Réinitialisation du mot de passe.
+- Accès non autorisé à une page privée.
+- Tentative de lecture du CV d'un autre utilisateur.
+
+### Tests de paiement
+
+- Paiement réussi.
+- Paiement refusé.
+- Paiement annulé.
+- Paiement en attente.
+- Webhook invalide.
+- Webhook répété.
+- Montant incorrect.
+- Devise incorrecte.
+- Transaction déjà traitée.
+- Expiration de l'accès premium.
+- Remboursement, selon les capacités du prestataire.
+- Tentative de s'attribuer le premium en modifiant le frontend.
+- Tentative d'utiliser une offre payante non disponible dans le pays.
+
+Utiliser le mode sandbox du prestataire lorsque disponible.
+
+Ne jamais utiliser de véritables fonds pour les tests automatisés.
+
+### Tests techniques
+
+- Compilation.
+- Vérification TypeScript.
+- Analyse statique.
+- Tests unitaires.
+- Tests d'intégration.
+- Tests de sécurité adaptés.
+- Tests des principales routes.
+- Tests de génération PDF.
+- Tests sur plusieurs tailles d'écran.
+- Vérification des erreurs de console.
+- Vérification de la compatibilité avec l'environnement de déploiement.
+
+Corriger les erreurs introduites par les modifications.
+
+Ne masque pas les erreurs en désactivant les contrôles de qualité.
+
+---
+
+## 19. DÉPLOIEMENT ET CONFIGURATION
+
+Préparer le projet pour un déploiement sur une plateforme adaptée à sa stack.
+
+Documenter les variables d'environnement nécessaires, par exemple :
+
+- URL de l'application.
+- URL du backend.
+- Variables de connexion à la base de données.
+- Clés publiques autorisées.
+- Clés serveur des prestataires.
+- Secrets de validation des webhooks.
+- Configuration des e-mails.
+- Configuration de l'IA si elle est utilisée.
+
+Les noms exacts des variables doivent correspondre aux bibliothèques et services réellement intégrés.
+
+Créer un fichier `.env.example` sans aucune clé réelle.
+
+Ne jamais inclure de secrets dans le dépôt Git.
+
+Prévoir :
+
+- Une procédure d'installation.
+- Une procédure de migration.
+- Une procédure de démarrage local.
+- Une procédure de déploiement.
+- Une procédure de sauvegarde.
+- Une procédure de restauration.
+- Une documentation pour configurer les paiements.
+- Une documentation pour créer le premier administrateur de manière sécurisée.
+
+Ne jamais créer un compte administrateur public avec un mot de passe connu ou codé en dur.
+
+---
+
+## 20. ORDRE DE DÉVELOPPEMENT
+
+Développe par phases. Termine et teste chaque phase avant de passer à la suivante.
+
+### Phase 1 — Audit
+
+- Analyser l'architecture.
+- Identifier les composants réutilisables.
+- Vérifier les routes et la base de données.
+- Identifier les erreurs existantes.
+- Produire un plan de modification.
+
+Ne modifier aucun fichier avant d'avoir compris les risques.
+
+### Phase 2 — Interface publique
+
+- Créer ou améliorer la page d'accueil.
+- Construire les pages publiques.
+- Créer la bibliothèque des modèles.
+- Mettre en place le responsive design.
+
+### Phase 3 — Constructeur de CV
+
+- Créer les formulaires.
+- Gérer les sections.
+- Ajouter la prévisualisation.
+- Implémenter la sauvegarde.
+- Tester la génération PDF.
+
+### Phase 4 — Comptes et tableau de bord
+
+- Authentification.
+- Gestion des CV.
+- Sauvegarde persistante.
+- Contrôle des autorisations.
+- Gestion du profil.
+
+### Phase 5 — Forfaits
+
+- Créer la logique des offres.
+- Configurer les quotas.
+- Appliquer les restrictions d'accès côté serveur.
+- Tester les transitions entre forfaits.
+
+### Phase 6 — Paiements au Bénin
+
+- Sélectionner le prestataire.
+- Intégrer les transactions.
+- Configurer les webhooks.
+- Sécuriser la confirmation.
+- Tester les erreurs et les paiements répétés.
+
+Ne pas activer les paiements réels tant que les identifiants marchands et les tests nécessaires ne sont pas disponibles.
+
+### Phase 7 — Importation et assistance
+
+- Importer les documents.
+- Extraire les informations.
+- Ajouter l'assistance à la rédaction si les services sont configurés.
+- Tester les scénarios d'échec.
+
+### Phase 8 — Administration
+
+- Gérer les utilisateurs.
+- Gérer les modèles.
+- Gérer les forfaits.
+- Gérer les transactions.
+- Ajouter les journaux d'audit.
+
+### Phase 9 — Audit final
+
+- Corriger les bugs.
+- Vérifier la sécurité.
+- Vérifier les autorisations.
+- Vérifier le rendu PDF.
+- Tester les paiements.
+- Vérifier la documentation.
+- Préparer le déploiement.
+
+Ne saute aucune phase critique simplement pour annoncer que le projet est terminé.
+
+---
+
+## 21. CRITÈRES DE RÉUSSITE
+
+Le produit sera considéré comme fonctionnel lorsque les conditions suivantes seront satisfaites :
+
+1. Un visiteur peut découvrir les modèles.
+2. Un utilisateur peut créer un compte.
+3. Un utilisateur peut créer un CV sans assistance.
+4. Les informations saisies sont conservées.
+5. Un utilisateur peut modifier et reprendre son CV.
+6. La prévisualisation correspond au document généré.
+7. Le PDF est téléchargeable et lisible.
+8. Les documents privés sont protégés.
+9. Les offres et leurs limites sont appliquées côté serveur.
+10. Un paiement confirmé par le prestataire active correctement le forfait.
+11. Une transaction échouée n'accorde aucun droit premium.
+12. Les paiements sont limités au marché prévu.
+13. L'administration fonctionne avec des autorisations vérifiées.
+14. Les fonctionnalités principales sont testées.
+15. Le projet peut être déployé à partir de la documentation.
+16. Aucun secret n'est exposé.
+17. Aucun bug connu introduit par le développement n'est ignoré.
+
+---
+
+## 22. INSTRUCTIONS FINALES AU DÉVELOPPEUR IA
+
+Commence par auditer le projet existant.
+
+Présente ensuite :
+
+- Les technologies actuellement utilisées.
+- Les fonctionnalités déjà opérationnelles.
+- Les fonctionnalités manquantes.
+- Les fichiers qui devront être modifiés.
+- Les risques identifiés.
+- Le plan de réalisation par phases.
+
+Puis commence le développement en respectant strictement les règles de sécurité et de non-régression.
+
+Si une information manque, choisis une solution raisonnable et documente ton choix. Pose une question uniquement lorsqu'une décision indispensable ne peut pas être prise sans moi.
+
+Ne reconstruis pas inutilement ce qui fonctionne déjà.
+
+Ne prétends pas avoir exécuté des tests qui n'ont pas réellement été exécutés.
+
+Ne simule pas un paiement réel.
+
+Ne laisse pas des boutons importants sans action.
+
+Ne présente pas une maquette comme une application terminée.
+
+À la fin de chaque phase, fournis un compte rendu indiquant :
+
+- Les fichiers créés.
+- Les fichiers modifiés.
+- Les fonctionnalités ajoutées.
+- Les tests réellement exécutés.
+- Les résultats obtenus.
+- Les problèmes restants.
+- Les services ou clés qui nécessitent mon intervention.
+
+L'objectif final est de produire une véritable plateforme de création de CV, commercialisable au Bénin, maintenable, sécurisée et prête à évoluer vers d'autres marchés.
+
+**Commence maintenant par l'audit du projet et le plan de réalisation. Ne modifie pas les fichiers avant d'avoir identifié les risques.**
