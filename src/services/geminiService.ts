@@ -32,51 +32,23 @@ if (apiKey) {
 export async function enhanceWithAI(options: AIEnhanceOptions): Promise<AIEnhanceResult> {
   const { type, text = '', jobTitle = 'Professionnel', context = '' } = options;
 
-  // Si l'API Gemini est configurée et accessible
-  if (aiClient) {
-    try {
-      let prompt = '';
-      if (type === 'summary') {
-        prompt = `Tu es un expert en recrutement au Bénin et en Afrique de l'Ouest.
-Améliore et dynamise ce résumé professionnel pour le poste de "${jobTitle}" :
-Texte original : "${text}"
-Contexte additionnel : "${context}"
+  // 1. Essai via le proxy backend sécurisé /api/ai/enhance
+  try {
+    const response = await fetch('/api/ai/enhance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, text, jobTitle, context })
+    });
 
-Règles impératives :
-1. Reste 100% fidèle aux compétences réelles, n'invente aucun diplôme ni entreprise fictive.
-2. Rédige en français soigné, percutant, d'environ 3 à 5 phrases adaptées aux recruteurs au Bénin.
-3. Renvoie UNIQUEMENT le texte amélioré sans formules de politesse ni explications meta.`;
-      } else if (type === 'experience') {
-        prompt = `Tu es un conseiller carrière au Bénin.
-Reformule cette description de mission/expérience pour le poste de "${jobTitle}" :
-Texte original : "${text}"
-
-Règles :
-1. Formule sous forme de puces d'actions concrètes commençant par des verbes d'action au participe ou infinitif.
-2. Mets en valeur les réalisations et responsabilités sans inventer de faux chiffres.
-3. Rédige en français professionnel et concis.
-4. Renvoie directement le texte reformulé.`;
-      } else if (type === 'skills') {
-        prompt = `Propose 6 à 8 compétences professionnelles et techniques clés couramment recherchées au Bénin pour le métier de "${jobTitle}".
-Donne la liste séparée par des virgules, sans numérotation ni texte superflu.`;
-      } else if (type === 'grammar') {
-        prompt = `Corrige les fautes d'orthographe, de grammaire et de typographie française dans ce texte de CV sans en dénaturer le sens :
-"${text}"
-Renvoie UNIQUEMENT le texte corrigé.`;
-      }
-
-      const response = await aiClient.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-      });
-
-      const outputText = response.text?.trim() || '';
-      if (outputText) {
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.content) {
+        const outputText = data.content.trim();
         if (type === 'skills') {
           const list = outputText
             .split(/[,;\n]/)
-            .map((s) => s.trim().replace(/^[-*•]\s*/, ''))
-            .filter((s) => s.length > 1);
+            .map((s: string) => s.trim().replace(/^[-*•]\s*/, ''))
+            .filter((s: string) => s.length > 1);
           return {
             content: outputText,
             suggestions: list,
@@ -88,12 +60,12 @@ Renvoie UNIQUEMENT le texte corrigé.`;
           isAI: true
         };
       }
-    } catch (e) {
-      console.warn('Erreur appel Gemini API, bascule sur les modèles de suggestions prédéfinis.', e);
     }
+  } catch (e) {
+    console.info('Proxy IA indisponible, utilisation du moteur heuristique béninois de secours.', e);
   }
 
-  // Fallback haute qualité local si la clé API n'est pas renseignée
+  // 2. Fallback de haute qualité local spécifique au contexte béninois
   return getLocalHeuristicEnhancement(options);
 }
 

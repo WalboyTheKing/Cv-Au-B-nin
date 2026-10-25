@@ -22,6 +22,7 @@ const PREFIX = APP_CONFIG.storageKeyPrefix;
 
 export const INITIAL_DEMO_CV: CVData = {
   id: 'cv_demo_01',
+  userId: 'user_benin_demo',
   title: 'CV Ingénieur Logiciel - Cotonou',
   personalInfo: {
     firstName: 'Jean-Eudes',
@@ -321,7 +322,14 @@ class StorageService {
     const raw = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
     const all = raw.map((c) => this.cleanCorruptedCV(c));
     if (!userId) return all;
-    return all.filter((c) => !c.userId || c.userId === userId);
+    return all.filter((c) => c.userId === userId);
+  }
+
+  isCVPremiumActive(cv?: CVData | null): boolean {
+    if (!cv || !cv.access) return false;
+    if (cv.access.status !== 'active') return false;
+    if (!cv.access.expiresAt) return false;
+    return new Date(cv.access.expiresAt).getTime() > Date.now();
   }
 
   getCVById(id: string): CVData | null {
@@ -503,8 +511,10 @@ class StorageService {
     userEmail: string;
     userName: string;
     plan: Plan;
+    cvId?: string;
+    cvTitle?: string;
   }): ManualPaymentOrder {
-    const { userId, userEmail, userName, plan } = params;
+    const { userId, userEmail, userName, plan, cvId, cvTitle } = params;
     const now = new Date().toISOString();
     const orderNumber = `CMD-MOOV-${Date.now().toString().slice(-6)}`;
     const newOrder: ManualPaymentOrder = {
@@ -513,9 +523,11 @@ class StorageService {
       userId,
       userEmail,
       userName,
+      cvId: cvId || '',
+      cvTitle: cvTitle || 'Mon CV Professionnel',
       planId: plan.id,
       planName: plan.name,
-      planCode: plan.code as 'premium_7d' | 'plus_30d',
+      planCode: plan.code as 'cand_24h' | 'career_30d' | 'premium_7d' | 'plus_30d',
       amountXOF: plan.priceXOF,
       currency: 'XOF',
       operator: 'moov_money',
@@ -533,7 +545,7 @@ class StorageService {
     this.addAuditLog({
       actorId: userId,
       actorEmail: userEmail,
-      action: `Création commande Moov Money ${orderNumber} (${plan.priceXOF} FCFA pour ${plan.name})`,
+      action: `Création commande Moov Money ${orderNumber} (${plan.priceXOF} FCFA pour ${plan.name} - CV: ${newOrder.cvTitle})`,
       resourceType: 'order',
       resourceId: newOrder.id
     });
@@ -622,17 +634,54 @@ class StorageService {
       return { success: false, error: 'Forfait associé introuvable.' };
     }
 
-    const now = new Date().toISOString();
+    // Calcul de la durée exacte :
+    // 500 FCFA = 24 heures (24 * 3600 * 1000 ms)
+    // 1000 FCFA = 30 jours (30 * 24 * 3600 * 1000 ms)
+    const is30Days = order.planCode === 'career_30d' || order.planCode === 'plus_30d';
+    const durationMs = is30Days ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+
     order.status = 'approved';
     order.decision = {
       adminId,
       adminEmail,
-      decisionDate: now
+      decisionDate: nowIso
     };
-    order.updatedAt = now;
+    order.updatedAt = nowIso;
 
     all[orderIndex] = order;
     this.setItem('manual_orders', all);
+
+    // Mise à jour ciblée des droits sur le CV spécifique (multi-CV strict)
+    const allCVs = this.getCVs();
+    let targetCV = order.cvId ? allCVs.find((c) => c.id === order.cvId) : null;
+    if (!targetCV && order.userId) {
+      targetCV = allCVs.find((c) => c.userId === order.userId);
+    }
+
+    if (targetCV) {
+      const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
+      let expiresAtDate: Date;
+      // Règle de renouvellement : prolongation cohérente si encore actif, sinon nouveau départ
+      if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
+        expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
+      } else {
+        expiresAtDate = new Date(now.getTime() + durationMs);
+      }
+
+      targetCV.access = {
+        planCode: order.planCode,
+        planName: order.planName,
+        status: 'active',
+        approvedAt: nowIso,
+        expiresAt: expiresAtDate.toISOString(),
+        orderId: order.id,
+        orderNumber: order.orderNumber
+      };
+      this.saveCV(targetCV);
+    }
 
     // Activation de l'abonnement pour l'utilisateur
     this.activateSubscription(order.userId, plan);
@@ -649,7 +698,7 @@ class StorageService {
       currency: 'XOF',
       phoneNumber: order.submission?.senderPhone || MOOV_MONEY_BENEFICIARY.phoneNumber,
       status: 'confirmed',
-      confirmedAt: now,
+      confirmedAt: nowIso,
       createdAt: order.createdAt
     });
 

@@ -35,7 +35,7 @@ export const PricingSection: React.FC<PricingSectionProps> = ({
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto items-stretch">
           {plans.map((plan) => {
-            const isFeatured = plan.code === 'premium_7d';
+            const isFeatured = plan.code === 'cand_24h' || plan.code === 'premium_7d';
             const isCurrent = currentUser?.subscription?.planId === plan.id;
 
             return (
@@ -84,7 +84,7 @@ export const PricingSection: React.FC<PricingSectionProps> = ({
                     >
                       {plan.priceXOF === 0
                         ? 'Accès gratuit permanent'
-                        : `Paiement unique • Valable ${plan.durationDays} jours`}
+                        : `Paiement unique • Valable ${plan.durationHours ? plan.durationHours + ' heures' : plan.durationDays + ' jours'} pour 1 CV`}
                     </span>
                   </div>
 

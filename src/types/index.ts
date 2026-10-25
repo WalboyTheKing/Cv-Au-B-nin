@@ -83,6 +83,16 @@ export interface CVSettings {
   sectionOrder: string[];
 }
 
+export interface CVAccessEntitlement {
+  planCode: 'cand_24h' | 'career_30d' | 'premium_7d' | 'plus_30d' | 'free';
+  planName: string;
+  status: 'active' | 'expired' | 'none';
+  approvedAt?: string;
+  expiresAt?: string;
+  orderId?: string;
+  orderNumber?: string;
+}
+
 export interface CVData {
   id: string;
   userId?: string;
@@ -95,6 +105,7 @@ export interface CVData {
   languages: Language[];
   customSections: CustomSection[];
   settings: CVSettings;
+  access?: CVAccessEntitlement;
   createdAt: string;
   updatedAt: string;
 }
@@ -123,9 +134,10 @@ export interface TemplateDefinition {
 export interface Plan {
   id: string;
   name: string;
-  code: 'free' | 'premium_7d' | 'plus_30d';
+  code: 'free' | 'cand_24h' | 'career_30d' | 'premium_7d' | 'plus_30d';
   priceXOF: number;
   durationDays: number;
+  durationHours?: number;
   description: string;
   features: string[];
   quotas: {
@@ -142,7 +154,7 @@ export interface UserSubscription {
   id: string;
   userId: string;
   planId: string;
-  planCode: 'free' | 'premium_7d' | 'plus_30d';
+  planCode: 'free' | 'cand_24h' | 'career_30d' | 'premium_7d' | 'plus_30d';
   status: 'active' | 'pending' | 'expired' | 'cancelled' | 'refunded';
   startsAt: string;
   expiresAt: string;
@@ -200,9 +212,11 @@ export interface ManualPaymentOrder {
   userId: string;
   userEmail: string;
   userName: string;
+  cvId?: string;
+  cvTitle?: string;
   planId: string;
   planName: string;
-  planCode: 'premium_7d' | 'plus_30d';
+  planCode: 'cand_24h' | 'career_30d' | 'premium_7d' | 'plus_30d';
   amountXOF: number;
   currency: 'XOF';
   operator: 'moov_money';
@@ -213,6 +227,13 @@ export interface ManualPaymentOrder {
   decision?: PaymentDecision;
   createdAt: string;
   updatedAt: string;
+}
+
+export function isCVAccessActive(cv?: CVData | null): boolean {
+  if (!cv || !cv.access) return false;
+  if (cv.access.status !== 'active') return false;
+  if (!cv.access.expiresAt) return false;
+  return new Date(cv.access.expiresAt).getTime() > Date.now();
 }
 
 export interface AuditLog {

@@ -12,6 +12,8 @@ export interface CreateOrderParams {
   userEmail: string;
   userName: string;
   planId: string;
+  cvId?: string;
+  cvTitle?: string;
 }
 
 export interface OrderCreationResult {
@@ -36,7 +38,7 @@ export class PaymentService {
    * Crée une commande en attente de paiement
    */
   createOrder(params: CreateOrderParams): OrderCreationResult {
-    const { userId, userEmail, userName, planId } = params;
+    const { userId, userEmail, userName, planId, cvId, cvTitle } = params;
 
     // Récupération stricte du prix côté configuration (jamais depuis le client)
     const plan = storageService.getPlanById(planId);
@@ -54,12 +56,14 @@ export class PaymentService {
       return { success: true };
     }
 
-    // Création de la commande formelle
+    // Création de la commande formelle rattachée au CV spécifique
     const order = storageService.createManualOrder({
       userId,
       userEmail,
       userName,
-      plan
+      plan,
+      cvId,
+      cvTitle
     });
 
     return {

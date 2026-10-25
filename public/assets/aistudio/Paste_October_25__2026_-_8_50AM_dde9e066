@@ -1,0 +1,643 @@
+# CV PRO BÉNIN — PROMPT MAÎTRE DE FINALISATION COMPLÈTE, AUDIT, CORRECTIONS, TESTS ET PRÉPARATION AU LANCEMENT
+
+## 1. TON RÔLE ET TA MISSION
+
+Tu interviens comme un ingénieur logiciel senior, architecte full-stack, spécialiste de la sécurité applicative, des paiements, des tests automatisés, de l'expérience utilisateur et du déploiement en production.
+
+Tu travailles sur MON PROJET EXISTANT : **CV Pro Bénin**.
+
+Ta mission est de transformer le projet actuel en une version finale fiable, sécurisée, professionnelle, testée et prête à être déployée, sans recommencer le développement depuis zéro.
+
+Tu dois analyser le code réellement présent, identifier les défauts, corriger les problèmes dans les fichiers concernés, exécuter les tests possibles, vérifier les résultats et préparer le déploiement.
+
+**Je ne veux pas seulement un rapport d'audit ou une liste de recommandations. Je veux que tu effectues réellement les corrections nécessaires dans le code, puis que tu vérifies ton travail.**
+
+Ne prétends jamais qu'une tâche est terminée si elle ne l'est pas réellement.
+
+## 2. CONTEXTE ACTUEL DU PROJET
+
+Le projet possède déjà, selon les rapports précédents, les éléments suivants. Tu dois les vérifier dans le code avant de les considérer comme confirmés.
+
+### Interface et constructeur de CV
+
+- Application React avec TypeScript et Vite.
+- Interface existante avec navigation, pages, composants et styles.
+- Constructeur de CV organisé en 10 étapes.
+- 15 modèles de CV.
+- Choix des couleurs et des polices.
+- Aperçu du CV en direct, au format A4.
+- Export des CV en PDF avec html2canvas et jsPDF.
+- Tableau de bord utilisateur.
+- Gestion des CV créés et enregistrés.
+- Page d'accueil, tarification, conseils CV et interface d'administration.
+- Assistance à la rédaction par IA via Google Gemini, avec éventuel mécanisme de secours local.
+- Import de CV existants, dont le fonctionnement PDF/DOCX doit être vérifié.
+- Authentification existante à auditer.
+
+### Backend et données
+
+- Backend Node.js/Express présent dans `server.ts`.
+- Services existants, notamment `src/services/storage.ts`.
+- Configuration centralisée dans `src/config/index.ts`.
+- Types TypeScript dans `src/types/index.ts`.
+- Service de paiement manuel dans `src/services/paymentService.ts`.
+- Intégration potentielle de Supabase à vérifier.
+- Vérifier si les données sont stockées dans localStorage, en mémoire, dans le backend ou dans une véritable base de données distante.
+
+### Paiements et tarification
+
+Le système de paiement manuel Moov Money a été ajouté.
+
+Coordonnées configurées :
+
+- Bénéficiaire : **Waaliyou Z Labouda**
+- Opérateur : Moov Money Bénin
+- Numéro de réception : **0194537741**
+- Devise : FCFA (XOF)
+- Code USSD indiqué dans la configuration : `*855#`
+- Contact de support configuré : `contact@cvprobenin.bj`
+
+Vérifie les coordonnées dans le code et conserve-les sans les dupliquer inutilement. N'invente pas de coordonnées ni de statut de vérification du compte marchand.
+
+Offres prévues :
+
+- Découverte : gratuit, accès permanent selon les limites définies.
+- Accès Candidature : 500 FCFA pour 7 jours.
+- Pack Carrière : 1 000 FCFA pour 30 jours.
+
+Les tarifs doivent rester centralisés et configurables.
+
+Le parcours de paiement attendu est le suivant :
+
+1. Le client choisit une offre.
+2. Une commande unique est créée.
+3. Les instructions Moov Money s'affichent.
+4. Le client effectue son transfert séparément.
+5. Il déclare sa transaction avec sa référence et les informations demandées.
+6. La commande attend une vérification.
+7. Un administrateur autorisé vérifie le paiement réellement reçu.
+8. L'administrateur approuve ou rejette la déclaration.
+9. Premium est activé uniquement après une approbation valide.
+10. L'utilisateur peut consulter le statut et l'historique de sa commande.
+
+**Aucune API de paiement automatique n'est actuellement considérée comme connectée. Ne prétends pas que FedaPay ou un autre prestataire encaisse les fonds.**
+
+## 3. RÈGLES ABSOLUES DE TRAVAIL
+
+Avant toute modification :
+
+1. Examine la structure complète du dépôt.
+2. Lis les fichiers de configuration et les scripts `package.json`.
+3. Identifie les routes frontend et backend.
+4. Repère les fichiers de stockage, d'authentification, de paiement, d'administration, d'export PDF, d'import, d'IA et de configuration.
+5. Lis les éventuelles migrations SQL, politiques RLS et variables d'environnement documentées.
+6. Vérifie l'état Git si disponible, les modifications locales et les fichiers non suivis.
+7. Identifie les fonctionnalités déjà opérationnelles et les régressions éventuelles.
+
+Puis établis un plan de correction priorisé et exécute-le.
+
+Contraintes :
+
+- Ne recrée pas le projet.
+- Ne remplace pas tout le code par une nouvelle architecture sans nécessité démontrée.
+- Ne supprime pas les fonctionnalités existantes pour faire passer les tests.
+- Ne réduis pas le nombre de modèles de CV.
+- Ne modifie pas arbitrairement le design ou l'identité visuelle.
+- Ne supprime pas les données de l'utilisateur.
+- Ne réinitialise pas la base de données.
+- Ne remplace jamais des secrets réels par des valeurs inventées.
+- Ne stocke aucune clé secrète dans le frontend.
+- N'ajoute pas de dépendances lourdes sans raison.
+- N'installe pas de dépendance inutile.
+- Ne désactive pas TypeScript, ESLint ou les contrôles pour masquer les erreurs.
+- Ne modifie pas les tests simplement pour qu'ils passent sans corriger le problème.
+- Ne lance aucun transfert Mobile Money réel.
+- Ne marque aucune commande comme payée artificiellement.
+- Ne simule pas une validation réelle.
+- Ne publie pas en production sans autorisation explicite.
+- Ne prétends pas avoir testé des services externes sans accès réel à ces services.
+
+Fais des modifications ciblées, cohérentes, documentées et réversibles autant que possible.
+
+Si une correction dépend d'une clé secrète, d'un compte externe, d'une autorisation ou d'une action manuelle que tu ne possèdes pas, termine les autres tâches possibles, documente précisément le blocage et indique ce que je dois faire. Ne reste pas bloqué sur un seul élément.
+
+## 4. PHASE A — AUDIT TECHNIQUE COMPLET
+
+Analyse l'ensemble du projet et vérifie les éléments suivants.
+
+### Architecture et configuration
+
+- Cohérence entre frontend et backend.
+- Versions et compatibilité des dépendances.
+- Scripts de développement, de build, de lint et de test.
+- Gestion des erreurs.
+- Routes API et validation des entrées.
+- Gestion des variables d'environnement.
+- Gestion des secrets.
+- Configuration CORS.
+- Configuration de production.
+- Gestion des fichiers statiques.
+- Liens internes, routes manquantes et pages d'erreur.
+- Dépendances inutilisées, vulnérabilités connues et erreurs de configuration.
+
+### Fonctionnalités
+
+Vérifie chaque page et chaque parcours existant, notamment :
+
+- Accueil.
+- Inscription et connexion.
+- Tableau de bord.
+- Création et édition de CV.
+- Les 10 étapes du constructeur.
+- Les 15 modèles de CV.
+- Couleurs et polices.
+- Aperçu A4.
+- Export PDF.
+- Import de CV.
+- Assistance IA.
+- Tarification.
+- Paiement manuel.
+- Historique des commandes.
+- Abonnements.
+- Administration.
+- Conseils CV.
+- Pages légales.
+- Déconnexion et persistance de session.
+
+Crée un tableau interne de suivi des fonctionnalités avec leur état réel : fonctionnelle, partielle, défectueuse ou bloquée par une dépendance externe.
+
+Ne te limite pas à l'apparence de l'interface. Vérifie aussi les traitements, les données et les autorisations.
+
+## 5. PHASE B — AUTHENTIFICATION ET BASE DE DONNÉES
+
+### Authentification
+
+Vérifie si l'authentification actuelle est sécurisée.
+
+Si les mots de passe sont stockés en clair dans localStorage ou si le système se contente d'une authentification frontend :
+
+- Ne conserve pas ce mécanisme comme système de production.
+- Privilégie Supabase Auth si Supabase est déjà utilisé ou peut être configuré sans réécriture excessive.
+- Ne crée pas un système de mots de passe artisanal.
+- Vérifie l'inscription, la connexion, la déconnexion, la persistance de session et la récupération de compte si elle est configurée.
+- Vérifie les rôles et les permissions côté serveur.
+- Ne donne jamais un rôle administrateur à un utilisateur simplement parce qu'il modifie une valeur dans le navigateur.
+- Ne migre pas des mots de passe en clair vers une base distante.
+- Préserve les CV locaux existants et propose une migration contrôlée lorsque cela est possible.
+
+### Persistance
+
+Si une base distante est configurée, audite son utilisation réelle.
+
+Sinon, prépare une intégration Supabase adaptée au projet, avec :
+
+- Authentification sécurisée.
+- Persistance des CV.
+- Enregistrement des commandes.
+- Enregistrement des déclarations de paiement.
+- Enregistrement des abonnements.
+- Historique des décisions administratives.
+- Gestion des erreurs réseau.
+- Protection contre l'accès aux données d'autres utilisateurs.
+
+Prévois les migrations SQL nécessaires sans les appliquer à une base distante sans autorisation.
+
+### Sécurité de la base
+
+Si Supabase est utilisé :
+
+- Active et vérifie les politiques RLS.
+- Vérifie les permissions de chaque table.
+- N'expose jamais la clé `service_role` au navigateur.
+- Vérifie les autorisations au niveau des opérations sensibles.
+- Empêche la modification directe du statut de paiement par l'utilisateur.
+- Empêche l'auto-attribution d'un abonnement.
+- Limite l'accès aux justificatifs de paiement.
+- Vérifie les suppressions et modifications de données.
+
+Si les clés ou les autorisations manquent, fournis un fichier `.env.example` avec des noms de variables et des valeurs fictives clairement identifiées, jamais de véritables secrets.
+
+## 6. PHASE C — PAIEMENT MANUEL MOOV MONEY
+
+Inspecte et corrige les fichiers existants liés aux paiements, notamment :
+
+- `src/config/index.ts`
+- `src/types/index.ts`
+- `src/services/storage.ts`
+- `src/services/paymentService.ts`
+- `src/components/payment/PaymentModal.tsx`
+- `src/components/admin/AdminPanel.tsx`
+- `src/components/dashboard/Dashboard.tsx`
+- `server.ts`
+
+Adapte cette liste à la structure réelle du dépôt.
+
+### États de commande
+
+Utilise une machine à états cohérente, adaptée au modèle existant. Elle doit distinguer au minimum :
+
+- En attente de paiement.
+- Déclaration soumise, en attente de vérification.
+- Paiement approuvé.
+- Déclaration rejetée.
+- Commande annulée ou expirée, si cette fonction existe.
+
+Interdis les transitions non autorisées. Une commande approuvée ne peut pas revenir silencieusement à l'état initial.
+
+### Sécurité financière
+
+Vérifie que :
+
+- Le prix de l'offre est calculé à partir de la configuration fiable côté serveur.
+- Le navigateur ne peut pas choisir arbitrairement le montant.
+- La référence interne de commande est unique.
+- La référence de transaction Moov Money est contrôlée contre les doublons.
+- Les montants déclarés sont comparés au montant attendu.
+- Une déclaration ne peut pas valider elle-même un paiement.
+- L'approbation est réservée à un administrateur autorisé.
+- Les validations concurrentes ne peuvent pas attribuer plusieurs fois un abonnement.
+- Les actions d'approbation et de rejet sont journalisées.
+- Les justificatifs sont privés.
+- Les erreurs de base de données n'entraînent pas une activation Premium.
+- Les dates d'expiration sont calculées et vérifiées côté serveur.
+- Les abonnements expirés ne donnent plus accès aux fonctions payantes.
+- Les limites de l'offre gratuite et des offres Premium sont appliquées côté serveur lorsqu'elles sont pertinentes.
+
+Si la base de données permet les transactions, utilise une opération atomique ou une fonction SQL/RPC sécurisée pour valider la commande et activer l'abonnement ensemble.
+
+Ne te contente pas de masquer ou d'afficher un bouton dans React.
+
+### Validation humaine
+
+L'administrateur doit vérifier la transaction dans son compte Moov Money avant d'approuver la commande.
+
+Une capture d'écran n'est pas une preuve suffisante à elle seule.
+
+Ne simule pas la consultation du compte Moov Money. Ne prétends pas que le paiement est vérifié automatiquement.
+
+### Interface client
+
+Vérifie les instructions, la copie du numéro, le formulaire de déclaration, les validations, les messages de confirmation et le suivi de la commande.
+
+Ne collecte pas de code PIN, de mot de passe Mobile Money ou d'OTP.
+
+### Interface administrateur
+
+Vérifie :
+
+- La liste des commandes.
+- Les montants attendus et déclarés.
+- La référence de transaction.
+- Les informations nécessaires à la vérification.
+- La visualisation sécurisée des justificatifs.
+- L'approbation et le rejet avec motif.
+- L'historique d'audit.
+- La gestion des erreurs.
+- La prévention des doubles validations.
+
+Supprime tout mécanisme qui accorde Premium après un délai arbitraire ou à la simple soumission d'un formulaire.
+
+## 7. PHASE D — MODÈLES DE CV, ÉDITEUR ET EXPORT PDF
+
+Préserve les 15 modèles et teste-les individuellement.
+
+### Constructeur
+
+Vérifie :
+
+- Les 10 étapes.
+- La navigation précédente/suivante.
+- La validation des champs.
+- Les champs obligatoires.
+- Les données facultatives.
+- Les listes d'expériences et de formations.
+- L'ajout et la suppression de sections.
+- L'aperçu en direct.
+- L'enregistrement et la reprise d'un brouillon.
+- La gestion des erreurs.
+- La compatibilité mobile et ordinateur.
+
+### Export PDF
+
+Corrige les problèmes de pagination A4, de texte coupé, de sections qui débordent, d'images manquantes et de styles incorrects.
+
+Vérifie :
+
+- Les CV d'une page.
+- Les CV de plusieurs pages.
+- Les expériences longues.
+- Les caractères accentués et caractères spéciaux.
+- Les noms longs.
+- Les sections facultatives.
+- Les modèles avec colonnes.
+- Les modèles avec photo.
+- Les marges et les sauts de page.
+- La lisibilité du PDF final.
+
+N'affirme pas que le PDF est parfait sans examiner les fichiers réellement générés.
+
+### Import de CV
+
+Vérifie les formats acceptés.
+
+Si le parsing PDF ou DOCX est insuffisant :
+
+- Utilise une bibliothèque adaptée au format réel.
+- N'essaie pas de traiter un document binaire comme du simple texte.
+- Gère les fichiers corrompus ou non pris en charge.
+- Limite la taille des fichiers.
+- Valide les types de fichiers.
+- Évite l'exécution de contenus importés.
+- Préserve les informations extraites sans inventer les champs manquants.
+- Permets à l'utilisateur de vérifier et corriger les informations avant de créer son CV.
+
+Ne remplace pas les fonctions existantes par un import fictif.
+
+## 8. PHASE E — ASSISTANCE IA
+
+Inspecte l'intégration Gemini existante et son mécanisme de secours local.
+
+Vérifie :
+
+- L'utilisation d'une clé côté serveur.
+- L'absence de secrets dans le frontend.
+- La gestion des erreurs et des quotas.
+- Les limites de longueur des entrées.
+- La validation des résultats.
+- Le maintien des informations réellement fournies par l'utilisateur.
+- L'absence d'invention d'expériences, de diplômes ou de compétences.
+- La gestion des réponses invalides.
+- L'absence de divulgation de données d'un utilisateur à un autre.
+
+Si aucune clé API n'est disponible, garde un mode de secours clairement identifié. N'affiche pas une fausse réponse comme si Gemini avait été utilisé.
+
+Ne crée pas de dépense externe sans mon autorisation.
+
+## 9. PHASE F — TARIFICATION ET CONTRÔLE DES ACCÈS
+
+Conserve les offres existantes et centralise les tarifs.
+
+Vérifie que :
+
+- L'offre gratuite reste utilisable.
+- Les offres payantes affichent correctement leur prix et leur durée.
+- Les limites de fonctionnalités correspondent réellement aux offres.
+- Les utilisateurs ne peuvent pas s'accorder Premium par modification locale.
+- L'expiration est respectée.
+- Les commandes et abonnements restent cohérents.
+- Les erreurs d'accès sont expliquées clairement.
+- Le système ne facture pas automatiquement un utilisateur.
+- Aucun renouvellement payant automatique n'est annoncé s'il n'existe pas.
+
+Ne change pas les prix sans nécessité. Toute modification de tarification doit être signalée dans le rapport final.
+
+## 10. PHASE G — ADMINISTRATION ET PROTECTION DES DONNÉES
+
+Vérifie que le panneau d'administration n'est pas simplement protégé par un bouton ou une condition frontend.
+
+Contrôle :
+
+- L'identité de l'administrateur.
+- Les permissions côté serveur.
+- L'isolation des données.
+- Les accès aux commandes et justificatifs.
+- Les journaux d'audit.
+- La validation des données entrantes.
+- La limitation des requêtes sensibles.
+- Les messages d'erreur sans divulgation de secrets.
+- Les risques XSS, injection et accès non autorisé.
+- La gestion des sessions.
+- La protection des données personnelles.
+- Les demandes de suppression ou d'export des données personnelles lorsque nécessaire.
+
+Ne présente pas l'application comme conforme à toutes les obligations légales sans vérification.
+
+Prépare des pages ou textes de confidentialité et de conditions d'utilisation cohérents avec les fonctions réelles. Signale les éléments juridiques qui nécessitent une validation humaine.
+
+## 11. PHASE H — INTERFACE ET EXPÉRIENCE UTILISATEUR
+
+Conserve l'identité visuelle de CV Pro Bénin.
+
+Corrige les problèmes réellement détectés :
+
+- Liens inactifs.
+- Boutons sans effet.
+- Formulaires mal validés.
+- Erreurs de navigation.
+- Affichages incorrects sur mobile.
+- États de chargement absents.
+- Messages d'erreur obscurs.
+- Messages de succès trompeurs.
+- Textes incohérents.
+- Mauvaise gestion des états vides.
+- Contrastes ou éléments difficiles à utiliser.
+- Problèmes de navigation clavier.
+
+Utilise des libellés clairs en français et FCFA pour les tarifs.
+
+Ne refais pas arbitrairement le design si l'interface fonctionne déjà bien.
+
+## 12. PHASE I — TESTS AUTOMATISÉS ET MANUELS
+
+Inspecte les scripts disponibles avant de lancer les commandes.
+
+Exécute, si elles existent :
+
+- Le lint.
+- La vérification TypeScript.
+- Le build de production.
+- Les tests unitaires.
+- Les tests d'intégration.
+- Les tests end-to-end disponibles.
+- Les contrôles de dépendances et de configuration.
+
+Ajoute des tests ciblés lorsqu'ils sont nécessaires et compatibles avec l'architecture.
+
+Teste notamment :
+
+1. Inscription et connexion.
+2. Déconnexion et reconnexion.
+3. Persistance des CV.
+4. Création, modification et suppression d'un CV.
+5. Les 15 modèles.
+6. Export PDF d'une page et de plusieurs pages.
+7. Import de fichiers valides et invalides.
+8. Comportement de l'IA avec et sans configuration.
+9. Commande gratuite.
+10. Commande payante.
+11. Déclaration de paiement.
+12. Blocage Premium avant approbation.
+13. Approbation autorisée.
+14. Rejet avec motif.
+15. Tentative d'auto-approbation.
+16. Réutilisation d'une référence de transaction.
+17. Doubles validations simultanées.
+18. Expiration d'abonnement.
+19. Accès aux données d'un autre utilisateur.
+20. Persistance des commandes après rechargement.
+21. Fonctionnement mobile et ordinateur.
+22. Gestion des erreurs réseau.
+
+Ne désactive pas les contrôles de sécurité pour obtenir des tests verts.
+
+Si un test nécessite une vraie clé, un service externe ou un compte que tu ne possèdes pas, indique précisément ce qui n'a pas pu être testé.
+
+## 13. PHASE J — PRÉPARATION AU DÉPLOIEMENT
+
+Prépare une configuration de production documentée.
+
+### Hébergement
+
+Le projet utilise ou envisage Vercel. Vérifie les conditions du plan choisi avant une exploitation commerciale.
+
+Si le plan actuel n'autorise pas l'usage commercial, compare une solution compatible avec mon budget sans migrer automatiquement tout le projet.
+
+Évalue :
+
+- Le frontend React/Vite.
+- Le backend Express.
+- Les routes API.
+- Les fonctions serveur.
+- Le stockage.
+- Les variables d'environnement.
+- Le fonctionnement de Supabase.
+- Les limites de l'offre d'hébergement.
+- Les besoins de sauvegarde.
+
+Si le backend Express ne peut pas être déployé tel quel sur l'hébergement retenu, documente les adaptations nécessaires ou propose un hébergement backend distinct.
+
+Ne suppose pas qu'un site Vite déployé seul héberge automatiquement le serveur Express.
+
+### Configuration
+
+Prépare ou actualise :
+
+- `.env.example` sans secrets réels.
+- Les instructions de configuration.
+- Les commandes de build et de démarrage.
+- Les migrations SQL.
+- Les politiques RLS.
+- Les instructions de déploiement.
+- Les contrôles après déploiement.
+- Les instructions de retour arrière.
+
+Ne publie pas le site en production sans autorisation explicite.
+
+Ne marque pas comme configuré un service qui ne l'est pas.
+
+## 14. PHASE K — DOCUMENTATION
+
+Crée ou actualise une documentation concise et réellement adaptée au projet.
+
+Elle doit expliquer :
+
+- L'architecture.
+- L'installation locale.
+- Les variables d'environnement.
+- La configuration Supabase.
+- La configuration du backend.
+- Le lancement des tests.
+- Le déploiement.
+- Le fonctionnement des offres.
+- Le parcours de paiement manuel.
+- La validation des commandes.
+- La gestion des utilisateurs.
+- La gestion des erreurs.
+- Les procédures de sauvegarde et de restauration.
+- Les tâches qui nécessitent une action manuelle.
+
+Ne documente pas une fonction qui n'existe pas.
+
+## 15. ORDRE DE TRAVAIL OBLIGATOIRE
+
+Procède dans cet ordre :
+
+**Étape 1 :** audit complet et cartographie des risques.
+
+**Étape 2 :** correction des problèmes critiques de sécurité et de persistance.
+
+**Étape 3 :** correction du système de paiement manuel et des abonnements.
+
+**Étape 4 :** correction du constructeur, des modèles, de l'import et du PDF.
+
+**Étape 5 :** correction de l'IA, des quotas, de l'administration et de l'expérience utilisateur.
+
+**Étape 6 :** tests automatisés et manuels.
+
+**Étape 7 :** correction des régressions.
+
+**Étape 8 :** build final et préparation du déploiement.
+
+Ne t'arrête pas après l'audit. Continue les corrections réalisables sans attendre ma confirmation pour chaque petit changement.
+
+Si une dépendance externe empêche une étape, poursuis les autres tâches indépendantes et documente le blocage.
+
+Ne supprime pas une fonctionnalité pour contourner un problème. Si une modification risque de casser une partie importante du projet, isole-la et explique le risque.
+
+## 16. CRITÈRES DE RÉUSSITE
+
+La version finale doit satisfaire les critères suivants :
+
+- Le projet se construit sans erreur bloquante.
+- Les fonctionnalités existantes essentielles sont conservées.
+- Les données des utilisateurs sont correctement isolées.
+- L'authentification et les permissions ne reposent pas uniquement sur le frontend.
+- Les commandes et abonnements disposent d'un stockage persistant fiable.
+- Aucun paiement n'est approuvé automatiquement sans preuve vérifiée.
+- Aucun utilisateur ne peut s'attribuer Premium.
+- Les doubles validations sont empêchées.
+- Les abonnements expirent correctement.
+- Les modèles de CV et l'export PDF ont été testés.
+- L'import ne prétend pas extraire correctement des données qu'il ne sait pas lire.
+- Les clés et secrets ne sont pas exposés.
+- Le site et le backend ont une stratégie de déploiement cohérente.
+- Les tests réellement exécutés sont documentés.
+- Les blocages externes et les tâches manuelles restantes sont clairement indiqués.
+
+N'affirme pas que tous les critères sont satisfaits si certains n'ont pas été testés.
+
+## 17. RAPPORT FINAL OBLIGATOIRE
+
+À la fin, fournis un rapport structuré avec :
+
+### A. État initial
+Les problèmes réellement trouvés avant correction.
+
+### B. Corrections réalisées
+Les fichiers modifiés et les changements effectués.
+
+### C. Sécurité
+L'état de l'authentification, des rôles, du stockage, des politiques RLS, des paiements et des abonnements.
+
+### D. Fonctionnalités
+L'état du constructeur, des 15 modèles, du PDF, de l'import, de l'IA, du tableau de bord et de l'administration.
+
+### E. Tests
+Les commandes exécutées, les résultats exacts, les tests réussis et échoués.
+
+### F. Déploiement
+L'hébergement compatible, les variables requises, les migrations et les étapes restantes.
+
+### G. Coûts
+Les services pouvant fonctionner sur une offre gratuite, les limites connues et les services susceptibles d'engendrer des frais.
+
+### H. Blocages
+Les actions que je dois accomplir manuellement, les comptes à configurer et les éléments qui ne peuvent pas être vérifiés depuis le code.
+
+### I. Verdict
+Choisis honnêtement l'un de ces états :
+
+- NON PRÊT : risques critiques non corrigés.
+- TESTABLE EN LOCAL : fonctions principales vérifiées localement, mais pas encore prêtes pour une bêta distante.
+- PRÊT POUR UNE BÊTA PRIVÉE : exigences essentielles satisfaites et limites restantes documentées.
+- PRÊT POUR DÉPLOIEMENT COMMERCIAL : contrôles nécessaires réalisés, configuration de production vérifiée et aucune dépendance critique non résolue.
+
+Un build réussi ne suffit pas pour déclarer le projet prêt à recevoir de vrais paiements.
+
+## INSTRUCTION FINALE
+
+Commence maintenant par inspecter le dépôt et établir ton plan. Ensuite, effectue les corrections nécessaires par étapes, vérifie les résultats après chaque groupe de changements et poursuis jusqu'à ce que toutes les tâches réalisables soient terminées.
+
+Je veux une version finale fiable de CV Pro Bénin, pas une nouvelle maquette, pas une démonstration artificielle et pas une liste de promesses.
+
+**Préserve le travail déjà réalisé, corrige réellement les défauts, ne simule jamais un résultat et indique clairement tout ce qui nécessite encore mon intervention.**

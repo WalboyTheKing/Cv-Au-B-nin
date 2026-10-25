@@ -139,11 +139,31 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     return () => clearTimeout(timer);
   }, [cv]);
 
-  // Vérification de la formule d'abonnement pour le filigrane
-  const isPremiumUser =
+  // Vérification stricte des droits Premium pour CE CV spécifiquement
+  const now = Date.now();
+  const cvExpiresTime = cv.access?.expiresAt ? new Date(cv.access.expiresAt).getTime() : 0;
+  const isCVPremiumActive = Boolean(
+    cv.access &&
+    cv.access.status === 'active' &&
+    cvExpiresTime > now
+  );
+  const isCVExpired = Boolean(
+    cv.access &&
+    cv.access.expiresAt &&
+    cvExpiresTime <= now
+  );
+
+  // Droits actifs : spécifiques à ce CV ou tolérance compte admin/abonné
+  const hasActiveAccess = isCVPremiumActive || Boolean(
     currentUser?.subscription?.status === 'active' &&
-    (currentUser.subscription.planCode === 'premium_7d' ||
-      currentUser.subscription.planCode === 'plus_30d');
+    new Date(currentUser.subscription.expiresAt).getTime() > now &&
+    (currentUser.subscription.planCode === 'cand_24h' ||
+      currentUser.subscription.planCode === 'career_30d' ||
+      currentUser.subscription.planCode === 'premium_7d' ||
+      currentUser.subscription.planCode === 'plus_30d')
+  );
+
+  const isPremiumUser = hasActiveAccess;
 
   const steps = [
     { num: 1, label: 'Identité', icon: <User className="w-4 h-4" /> },
@@ -211,7 +231,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
       const filename = `${cv.personalInfo.lastName || 'Candidat'}_${cv.personalInfo.firstName || 'CV'}.pdf`.replace(/\s+/g, '_');
       await generateCVPdf('cv-document-preview', {
         filename,
-        hasWatermark: !isPremiumUser,
+        hasWatermark: !hasActiveAccess,
         watermarkText: 'Créé avec CV Pro Bénin — Version Découverte',
         onProgress: (p) => setExportProgress(p)
       });
@@ -278,9 +298,70 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg shadow-sm transition-all"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{isExporting ? `Export (${exportProgress}%)` : 'Télécharger PDF'}</span>
+            <span>{isExporting ? `Export (${exportProgress}%)` : hasActiveAccess ? 'Télécharger PDF Pro' : 'Télécharger (avec filigrane)'}</span>
           </button>
         </div>
+      </div>
+
+      {/* Bandeau d'état des droits commerciaux sur ce CV */}
+      <div className="border-b px-4 py-2 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 transition-all">
+        {hasActiveAccess ? (
+          <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 flex items-center justify-between text-emerald-900">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                <strong>Accès Premium actif pour ce CV</strong> • Expire le{' '}
+                {cv.access?.expiresAt
+                  ? new Date(cv.access.expiresAt).toLocaleString('fr-FR', {
+                      dateStyle: 'short',
+                      timeStyle: 'short'
+                    })
+                  : 'date validée'}{' '}
+                (Téléchargement sans filigrane autorisé)
+              </span>
+            </div>
+            <span className="text-[10px] font-bold uppercase bg-emerald-200/70 text-emerald-900 px-2 py-0.5 rounded">
+              {cv.access?.planName || 'Accès Validé'}
+            </span>
+          </div>
+        ) : isCVExpired ? (
+          <div className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-amber-950">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Accès expiré pour ce CV</strong> (expiré le{' '}
+                {cv.access?.expiresAt
+                  ? new Date(cv.access.expiresAt).toLocaleString('fr-FR', {
+                      dateStyle: 'short',
+                      timeStyle: 'short'
+                    })
+                  : 'N/A'}
+                ). Vos données sont conservées. Les exports comportent un filigrane standard.
+              </span>
+            </div>
+            <button
+              onClick={onOpenPricing}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors shrink-0"
+            >
+              Renouveler l'accès (dès 500 FCFA)
+            </button>
+          </div>
+        ) : (
+          <div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-slate-700">
+            <div className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+              <span>
+                <strong>Brouillon non payé</strong> • Sauvegarde automatique active. Export sans filigrane réservé aux offres vérifiées Moov Money (500 FCFA / 24h ou 1 000 FCFA / 30j).
+              </span>
+            </div>
+            <button
+              onClick={onOpenPricing}
+              className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors shrink-0"
+            >
+              Débloquer l'export sans filigrane
+            </button>
+          </div>
+        )}
       </div>
 
       {exportError && (

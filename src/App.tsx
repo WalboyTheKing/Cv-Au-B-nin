@@ -222,7 +222,12 @@ export default function App() {
             cvs={cvs}
             onEditCV={handleEditCV}
             onCreateNewCV={handleCreateNewCV}
-            onOpenPricing={() => setSelectedPlanForPayment(plans[1] || plans[0])}
+            onOpenPricing={(targetCV) => {
+              if (targetCV) {
+                setActiveCV(targetCV);
+              }
+              setSelectedPlanForPayment(plans[1] || plans[0]);
+            }}
             onRefreshData={refreshData}
           />
         )}
@@ -267,6 +272,7 @@ export default function App() {
       {selectedPlanForPayment && (
         <PaymentModal
           plan={selectedPlanForPayment}
+          targetCV={activeCV}
           currentUser={
             currentUser || {
               id: 'guest_user',

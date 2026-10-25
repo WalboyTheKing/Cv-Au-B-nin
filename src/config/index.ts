@@ -60,17 +60,17 @@ export const INITIAL_PLANS: Plan[] = [
     code: 'free',
     priceXOF: 0,
     durationDays: 365,
-    description: 'Idéal pour concevoir son premier CV et tester la plateforme gratuitement.',
+    description: 'Concevez votre CV gratuitement. Les exports comportent un filigrane standard.',
     features: [
-      'Création d’un CV complet',
-      'Accès aux 5 modèles essentiels gratuits',
-      'Modification et sauvegarde automatique',
-      'Prévisualisation haute fidélité en temps réel',
-      'Téléchargement PDF standard (filigrane discret)',
-      'Conseils de rédaction béninois'
+      'Création et modification de votre CV',
+      'Sauvegarde automatique dans votre compte',
+      'Accès aux modèles essentiels',
+      'Prévisualisation haute fidélité A4 en temps réel',
+      'Export PDF avec filigrane standard',
+      'Données conservées en permanence'
     ],
     quotas: {
-      maxCVs: 1,
+      maxCVs: 5,
       allowWatermarkRemoval: false,
       allowPremiumTemplates: false,
       allowAIWriting: false,
@@ -79,22 +79,23 @@ export const INITIAL_PLANS: Plan[] = [
     isActive: true
   },
   {
-    id: 'plan_premium_7d',
-    name: 'Accès Candidature 7 Jours',
-    code: 'premium_7d',
+    id: 'plan_cand_24h',
+    name: 'Accès Candidature',
+    code: 'cand_24h',
     priceXOF: 500,
-    durationDays: 7,
-    description: 'Parfait pour postuler intensivement à une offre d’emploi urgente.',
+    durationDays: 1,
+    durationHours: 24,
+    description: '500 FCFA pour un CV — 24 heures d’accès aux modifications premium et aux exports sans filigrane dès approbation.',
     features: [
+      'Valable pour 1 CV spécifique choisi',
+      '24 heures complètes d’accès dès validation',
       'Téléchargement PDF haute résolution sans filigrane',
       'Accès illimité aux 15 modèles professionnels & modernes',
-      'Création jusqu’à 3 versions de CV différentes',
-      'Palette de couleurs et polices typographiques avancées',
-      'Assistance à la rédaction et reformulation',
-      'Support prioritaire par WhatsApp / Mobile Money'
+      'Modifications premium en temps réel pendant 24h',
+      'Conservation intégrale du CV après expiration'
     ],
     quotas: {
-      maxCVs: 3,
+      maxCVs: 1,
       allowWatermarkRemoval: true,
       allowPremiumTemplates: true,
       allowAIWriting: true,
@@ -103,23 +104,23 @@ export const INITIAL_PLANS: Plan[] = [
     isActive: true
   },
   {
-    id: 'plan_plus_30d',
-    name: 'Pack Carrière 30 Jours',
-    code: 'plus_30d',
+    id: 'plan_career_30d',
+    name: 'Pack Carrière',
+    code: 'career_30d',
     priceXOF: 1000,
     durationDays: 30,
-    description: 'La solution complète pour chercheurs d’emploi actifs et consultants.',
+    durationHours: 720,
+    description: '1 000 FCFA pour un CV — 30 jours d’accès aux modifications premium et aux exports sans filigrane dès approbation.',
     features: [
-      'Téléchargements illimités de PDF haute définition',
-      'Tous les 15 modèles sans aucune restriction',
-      'Jusqu’à 10 CV personnalisés (postes différents)',
-      'Assistance IA complète pour résumés et compétences',
-      'Module de duplication et déclinaison rapide',
-      'Aucun renouvellement automatique surprise',
-      'Reçu de paiement officiel en FCFA'
+      'Valable pour 1 CV spécifique choisi',
+      '30 jours complets d’accès dès validation',
+      'Téléchargements illimités de PDF sans aucun filigrane',
+      'Tous les 15 modèles professionnels & modernes',
+      'Modifications illimitées pendant toute la durée',
+      'Conservation intégrale du CV et historique après 30 jours'
     ],
     quotas: {
-      maxCVs: 10,
+      maxCVs: 1,
       allowWatermarkRemoval: true,
       allowPremiumTemplates: true,
       allowAIWriting: true,

@@ -1,0 +1,69 @@
+[
+  {
+    "id": "user_benin_demo",
+    "email": "candidat.benin@gmail.com",
+    "passwordHash": "9d5d01a2cbcb00d35fce3b11a9955e25d38aaebe38200d60d7a6667ccaa23945",
+    "firstName": "Jean-Eudes",
+    "lastName": "Dossou",
+    "countryCode": "BJ",
+    "phoneNumber": "+229 97 12 34 56",
+    "role": "user",
+    "subscription": {
+      "id": "sub_demo_free",
+      "userId": "user_benin_demo",
+      "planId": "plan_free",
+      "planCode": "free",
+      "status": "active",
+      "startsAt": "2026-10-01T00:00:00.000Z",
+      "expiresAt": "2027-10-01T00:00:00.000Z",
+      "createdAt": "2026-10-01T00:00:00.000Z"
+    },
+    "createdAt": "2026-10-01T00:00:00.000Z",
+    "updatedAt": "2026-10-24T00:00:00.000Z"
+  },
+  {
+    "id": "admin_master",
+    "email": "admin@cvprobenin.bj",
+    "passwordHash": "e2475024b94581491cc973c7cce57be3bf274df0799190c7d5c4bda53f841706",
+    "firstName": "Administrateur",
+    "lastName": "CV Pro Bénin",
+    "countryCode": "BJ",
+    "phoneNumber": "+229 90 00 00 01",
+    "role": "admin",
+    "subscription": {
+      "id": "sub_admin_plus",
+      "userId": "admin_master",
+      "planId": "plan_plus_30d",
+      "planCode": "plus_30d",
+      "status": "active",
+      "startsAt": "2026-01-01T00:00:00.000Z",
+      "expiresAt": "2030-01-01T00:00:00.000Z",
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-10-24T00:00:00.000Z"
+  },
+  {
+    "id": "usr_1792915070252_f591a98c",
+    "email": "rodrigue.bio@gmail.com",
+    "passwordHash": "b0e68222ea55e55b154ed39110477a76978109657fef7992126e943de31c94df",
+    "firstName": "Rodrigue",
+    "lastName": "BIO",
+    "countryCode": "BJ",
+    "phoneNumber": "+229 97 45 12 34",
+    "role": "user",
+    "subscription": {
+      "id": "sub_1792915070253",
+      "userId": "usr_1792915070252_f591a98c",
+      "planId": "plan_free",
+      "planCode": "free",
+      "status": "active",
+      "startsAt": "2026-10-25T07:57:50.252Z",
+      "expiresAt": "2027-10-25T07:57:50.253Z",
+      "createdAt": "2026-10-25T07:57:50.252Z"
+    },
+    "token": "tok_ff29dbbc83922f5447c4e3d866347f4a7cfca56a4338a65808f95d65c00eddd3",
+    "createdAt": "2026-10-25T07:57:50.252Z",
+    "updatedAt": "2026-10-25T07:57:58.647Z"
+  }
+]

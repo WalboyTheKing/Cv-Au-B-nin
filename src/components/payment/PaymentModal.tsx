@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { ManualPaymentOrder, Plan, UserProfile } from '../../types';
+import { CVData, ManualPaymentOrder, Plan, UserProfile } from '../../types';
 import { MOOV_MONEY_BENEFICIARY } from '../../config';
 import { paymentService } from '../../services/paymentService';
 import {
@@ -20,12 +20,14 @@ import {
   Upload,
   FileCheck2,
   Lock,
-  Info
+  Info,
+  FileText
 } from 'lucide-react';
 
 interface PaymentModalProps {
   plan: Plan | null;
   currentUser: UserProfile;
+  targetCV?: CVData | null;
   onClose: () => void;
   onOrderCreated?: (order: ManualPaymentOrder) => void;
   onPaymentSuccess?: (plan: Plan) => void;
@@ -34,6 +36,7 @@ interface PaymentModalProps {
 export const PaymentModal: React.FC<PaymentModalProps> = ({
   plan,
   currentUser,
+  targetCV,
   onClose,
   onOrderCreated,
   onPaymentSuccess
@@ -63,14 +66,30 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         userId: currentUser.id,
         userEmail: currentUser.email,
         userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
-        planId: plan.id
+        planId: plan.id,
+        cvId: targetCV?.id,
+        cvTitle: targetCV?.title
       });
       if (res.success && res.order) {
         setCurrentOrder(res.order);
         onOrderCreated?.(res.order);
+
+        // Synchronisation asynchrone côté serveur
+        fetch('/api/orders/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            userEmail: currentUser.email,
+            userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
+            planCode: plan.code,
+            cvId: targetCV?.id,
+            cvTitle: targetCV?.title
+          })
+        }).catch((err) => console.warn('Serveur non joignable pour créer la commande', err));
       }
     }
-  }, [plan, currentUser]);
+  }, [plan, currentUser, targetCV]);
 
   if (!plan) return null;
 
@@ -96,7 +115,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     }
   };
 
-  const handleSubmitDeclaration = (e: React.FormEvent) => {
+  const handleSubmitDeclaration = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -118,6 +137,24 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setIsSubmitting(true);
 
     try {
+      // Tentative de synchronisation serveur
+      try {
+        await fetch('/api/orders/declare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orderId: currentOrder.id,
+            transactionRef: transactionRef.trim(),
+            amountDeclared: Number(amountDeclared),
+            senderPhone: senderPhone.trim(),
+            notes: notes.trim(),
+            proofUrl
+          })
+        });
+      } catch (netErr) {
+        console.warn('Serveur non joignable, enregistrement déclaration local', netErr);
+      }
+
       const res = paymentService.submitDeclaration(currentOrder.id, {
         transactionRef: transactionRef.trim(),
         amountDeclared: Number(amountDeclared),
@@ -179,6 +216,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           {activeStep === 'instructions' && (
             <>
               {/* Récapitulatif montant & commande */}
+              {targetCV && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span className="text-emerald-950">
+                      CV sélectionné : <strong>{targetCV.title}</strong>
+                    </span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                    {targetCV.personalInfo?.firstName} {targetCV.personalInfo?.lastName}
+                  </span>
+                </div>
+              )}
+
               <div className="bg-slate-900 text-white p-5 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] text-slate-400 block font-medium">
@@ -198,10 +249,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/40 px-2.5 py-1 rounded-full font-bold block">
-                    Accès {plan.durationDays} Jours
+                    {plan.durationHours ? `${plan.durationHours} Heures d'accès` : `${plan.durationDays} Jours d'accès`}
                   </span>
                   <span className="text-[10px] text-slate-400 block mt-1.5">
-                    Zéro frais de passerelle
+                    1 seul CV • Zéro prélèvement
                   </span>
                 </div>
               </div>

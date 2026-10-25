@@ -56,6 +56,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
   const [checkAccount, setCheckAccount] = useState<boolean>(false);
   const [checkAmount, setCheckAmount] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const metrics: AdminMetrics = storageService.getAdminMetrics();
   const users: UserProfile[] = storageService.getUsers();
@@ -86,11 +87,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
     );
   });
 
-  const handleApproveOrder = () => {
+  const handleApproveOrder = async () => {
     if (!orderToApprove) return;
+    setModalError(null);
+
     if (!checkAccount || !checkAmount) {
-      alert("Veuillez cocher les cases attestant de la vérification préalable de votre compte Moov Money.");
+      setModalError("Veuillez cocher les cases attestant de la vérification préalable de votre compte Moov Money.");
       return;
+    }
+
+    // Tentative de synchronisation serveur
+    try {
+      await fetch('/api/admin/orders/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: orderToApprove.id,
+          adminId: 'admin_master',
+          adminEmail: 'admin@cvprobenin.bj',
+          checkAccount: true,
+          checkAmount: true
+        })
+      });
+    } catch (e) {
+      console.warn('Serveur non joignable pour approbation, repli local', e);
     }
 
     const res = storageService.approveManualOrder(
@@ -104,17 +124,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
       setOrderToApprove(null);
       setCheckAccount(false);
       setCheckAmount(false);
+      setModalError(null);
       setTimeout(() => setActionMessage(null), 4000);
     } else {
-      alert(res.error || "Erreur lors de l'approbation.");
+      setModalError(res.error || "Erreur lors de l'approbation.");
     }
   };
 
-  const handleRejectOrder = () => {
+  const handleRejectOrder = async () => {
     if (!orderToReject) return;
+    setModalError(null);
+
     if (!rejectionReason.trim()) {
-      alert("Veuillez indiquer un motif de refus.");
+      setModalError("Veuillez indiquer un motif explicite de refus.");
       return;
+    }
+
+    // Tentative de synchronisation serveur
+    try {
+      await fetch('/api/admin/orders/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: orderToReject.id,
+          adminId: 'admin_master',
+          adminEmail: 'admin@cvprobenin.bj',
+          reason: rejectionReason.trim()
+        })
+      });
+    } catch (e) {
+      console.warn('Serveur non joignable pour rejet, repli local', e);
     }
 
     const res = storageService.rejectManualOrder(
@@ -128,9 +167,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
       setActionMessage(`La commande ${orderToReject.orderNumber} a été marquée comme rejetée.`);
       setOrderToReject(null);
       setRejectionReason('');
+      setModalError(null);
       setTimeout(() => setActionMessage(null), 4000);
     } else {
-      alert(res.error || "Erreur lors du rejet.");
+      setModalError(res.error || "Erreur lors du rejet.");
     }
   };
 
@@ -381,6 +421,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
                             <div className="font-mono font-black text-emerald-400 text-sm">
                               {ord.amountXOF.toLocaleString('fr-FR')} FCFA
                             </div>
+                            {ord.cvTitle && (
+                              <div className="text-[10px] text-blue-300 truncate max-w-[160px]" title={ord.cvTitle}>
+                                CV: {ord.cvTitle}
+                              </div>
+                            )}
                           </td>
 
                           <td className="p-3.5">
@@ -707,12 +752,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
                 <span>Validation Encaissement Moov Money</span>
               </div>
               <button
-                onClick={() => setOrderToApprove(null)}
+                onClick={() => {
+                  setOrderToApprove(null);
+                  setModalError(null);
+                }}
                 className="text-slate-400 hover:text-white"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {modalError && (
+              <div className="p-3 bg-red-950/80 border border-red-500 text-red-200 rounded-xl text-xs font-semibold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{modalError}</span>
+              </div>
+            )}
 
             <div className="p-4 bg-slate-800 rounded-xl space-y-2 text-xs">
               <div className="flex justify-between">
@@ -726,6 +781,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
               <div className="flex justify-between">
                 <span className="text-slate-400">Forfait demandé :</span>
                 <span className="font-bold text-emerald-400">{orderToApprove.planName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">CV concerné :</span>
+                <span className="font-bold text-blue-300">{orderToApprove.cvTitle || 'Mon CV'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Durée d'accès attribuée :</span>
+                <span className="font-bold text-amber-300">
+                  {orderToApprove.planCode === 'career_30d' || orderToApprove.planCode === 'plus_30d'
+                    ? '30 Jours'
+                    : '24 Heures'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Montant attendu :</span>
@@ -798,12 +865,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBack }) => {
                 <span>Refuser la déclaration de paiement</span>
               </div>
               <button
-                onClick={() => setOrderToReject(null)}
+                onClick={() => {
+                  setOrderToReject(null);
+                  setModalError(null);
+                }}
                 className="text-slate-400 hover:text-white"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {modalError && (
+              <div className="p-3 bg-red-950/80 border border-red-500 text-red-200 rounded-xl text-xs font-semibold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{modalError}</span>
+              </div>
+            )}
 
             <p className="text-xs text-slate-300">
               Indiquez le motif de refus pour la commande <strong>{orderToReject.orderNumber}</strong>. Le client pourra consulter ce motif sur son tableau de bord.
