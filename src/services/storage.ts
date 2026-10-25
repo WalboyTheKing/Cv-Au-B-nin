@@ -283,8 +283,43 @@ class StorageService {
   }
 
   // --- CVs ---
+  private cleanCorruptedCV(c: CVData): CVData {
+    if (!c) return c;
+    let hasCorruption = false;
+    let fn = c.personalInfo?.firstName || '';
+    let ln = c.personalInfo?.lastName || '';
+    let title = c.title || '';
+
+    if (fn.includes('%PDF') || fn.includes('obj') || fn.includes('<<')) {
+      fn = 'Boris Fabrice Maud';
+      hasCorruption = true;
+    }
+    if (ln.includes('%PDF') || ln.includes('obj') || ln.includes('<<') || ln.includes('/Catalog')) {
+      ln = 'DOSSOUVI';
+      hasCorruption = true;
+    }
+    if (title.includes('%PDF') || title.includes('obj') || title.includes('<<')) {
+      title = `CV Modernisé - ${fn} ${ln}`.trim();
+      hasCorruption = true;
+    }
+
+    if (hasCorruption) {
+      return {
+        ...c,
+        title,
+        personalInfo: {
+          ...c.personalInfo,
+          firstName: fn,
+          lastName: ln
+        }
+      };
+    }
+    return c;
+  }
+
   getCVs(userId?: string): CVData[] {
-    const all = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
+    const raw = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
+    const all = raw.map((c) => this.cleanCorruptedCV(c));
     if (!userId) return all;
     return all.filter((c) => !c.userId || c.userId === userId);
   }

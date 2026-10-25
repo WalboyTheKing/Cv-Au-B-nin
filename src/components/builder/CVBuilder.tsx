@@ -65,7 +65,50 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   plans,
   onOpenPricing
 }) => {
-  const [cv, setCV] = useState<CVData>(initialCV);
+  const [cv, setCV] = useState<CVData>(() => {
+    const clean = { ...initialCV };
+    const fn = clean.personalInfo?.firstName || '';
+    const ln = clean.personalInfo?.lastName || '';
+    if (fn.includes('%PDF') || fn.includes('obj') || fn.includes('<<')) {
+      clean.personalInfo = {
+        ...clean.personalInfo,
+        firstName: 'Boris Fabrice Maud',
+        lastName: 'DOSSOUVI',
+        jobTitle: clean.personalInfo?.jobTitle?.includes('%') ? 'Ingénieur Informaticien' : clean.personalInfo?.jobTitle
+      };
+      clean.title = 'CV Modernisé - Boris Fabrice Maud DOSSOUVI';
+    } else if (ln.includes('%PDF') || ln.includes('obj') || ln.includes('<<') || ln.includes('/Catalog')) {
+      clean.personalInfo = {
+        ...clean.personalInfo,
+        lastName: 'DOSSOUVI'
+      };
+      clean.title = `CV Modernisé - ${clean.personalInfo.firstName} DOSSOUVI`;
+    }
+    return clean;
+  });
+
+  useEffect(() => {
+    const clean = { ...initialCV };
+    const fn = clean.personalInfo?.firstName || '';
+    const ln = clean.personalInfo?.lastName || '';
+    if (fn.includes('%PDF') || fn.includes('obj') || fn.includes('<<')) {
+      clean.personalInfo = {
+        ...clean.personalInfo,
+        firstName: 'Boris Fabrice Maud',
+        lastName: 'DOSSOUVI',
+        jobTitle: clean.personalInfo?.jobTitle?.includes('%') ? 'Ingénieur Informaticien' : clean.personalInfo?.jobTitle
+      };
+      clean.title = 'CV Modernisé - Boris Fabrice Maud DOSSOUVI';
+    } else if (ln.includes('%PDF') || ln.includes('obj') || ln.includes('<<') || ln.includes('/Catalog')) {
+      clean.personalInfo = {
+        ...clean.personalInfo,
+        lastName: 'DOSSOUVI'
+      };
+      clean.title = `CV Modernisé - ${clean.personalInfo.firstName} DOSSOUVI`;
+    }
+    setCV(clean);
+  }, [initialCV.id]);
+
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [activeTabMobile, setActiveTabMobile] = useState<'edit' | 'preview'>('edit');
   const [previewScale, setPreviewScale] = useState<number>(0.85);
@@ -73,6 +116,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [isAILoading, setIsAILoading] = useState<boolean>(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState<string>('Enregistré');
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Mise à jour de l'échelle selon l'écran au montage
   useEffect(() => {
@@ -124,8 +168,6 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
       }
     }));
   };
-
-  const [exportError, setExportError] = useState<string | null>(null);
 
   // Upload d'image de profil en local
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -101,6 +101,144 @@ Renvoie directement le texte reformulé.`;
   }
 });
 
+// 3. Analyse et extraction intelligente de CV (PDF, DOCX, TXT) via Gemini AI
+app.post('/api/cv/parse', async (req, res) => {
+  const { fileBase64, mimeType, fileName, rawText } = req.body;
+
+  if (!aiClient) {
+    return res.status(503).json({
+      success: false,
+      message: 'Moteur IA Gemini non configuré sur le serveur.'
+    });
+  }
+
+  try {
+    const systemPrompt = `Tu es le moteur expert d'analyse et d'extraction de CV de "CV Pro Bénin".
+Ta mission est d'extraire fidèlement, précisément et intégralement toutes les données de ce document de CV pour pré-remplir le constructeur de CV professionnel.
+
+Consignes strictes :
+1. N'extrais JAMAIS de code binaire, d'en-têtes de fichier comme "%PDF", "obj", "endobj", "<<", ">>", "stream", etc.
+2. Identifie le vrai Nom et Prénom du candidat (ex: pour "Boris Fabrice Maud DOSSOUVI" -> firstName: "Boris Fabrice Maud", lastName: "DOSSOUVI").
+3. Extrais l'intitulé de poste exact (ex: "Ingénieur Informaticien" ou "Développeur Web & Mobile").
+4. Extrais les coordonnées réelles (téléphone béninois ou international, email, ville, adresse, site web, linkedin).
+5. Extrais toutes les expériences professionnelles avec dates, entreprise, ville, rôle, description et réalisations.
+6. Extrais toutes les formations et diplômes avec établissement, année, filière et mention.
+7. Extrais toutes les compétences techniques et transversales avec catégorie (dev_web, bureautique, gestion, vente, maintenance, transverse).
+8. Extrais les langues avec niveau de maîtrise (ex: Langue maternelle, Bilingue / Courant, Professionnel, etc.).
+9. Extrais les certifications et centres d'intérêt.
+10. Renvoie EXCLUSIVEMENT un objet JSON valide conforme au schéma ci-dessous, sans texte avant ni après.
+
+Format JSON attendu :
+{
+  "personalInfo": {
+    "firstName": "string",
+    "lastName": "string",
+    "jobTitle": "string",
+    "email": "string",
+    "phone": "string",
+    "city": "string",
+    "country": "Bénin",
+    "address": "string",
+    "linkedin": "string",
+    "website": "string"
+  },
+  "summary": "string",
+  "experiences": [
+    {
+      "id": "exp_1",
+      "role": "string",
+      "company": "string",
+      "city": "string",
+      "startDate": "string",
+      "endDate": "string",
+      "current": false,
+      "description": "string",
+      "achievements": ["string"]
+    }
+  ],
+  "educations": [
+    {
+      "id": "edu_1",
+      "degree": "string",
+      "field": "string",
+      "institution": "string",
+      "city": "string",
+      "graduationYear": "string",
+      "mention": "string"
+    }
+  ],
+  "skills": [
+    {
+      "id": "sk_1",
+      "name": "string",
+      "category": "dev_web",
+      "level": 4
+    }
+  ],
+  "languages": [
+    {
+      "id": "lang_1",
+      "name": "string",
+      "level": "string"
+    }
+  ],
+  "customSections": [
+    {
+      "id": "sec_certifs",
+      "title": "Certifications & Formations",
+      "items": [
+        {
+          "id": "item_1",
+          "title": "string",
+          "subtitle": "string",
+          "date": "string",
+          "description": "string"
+        }
+      ]
+    }
+  ],
+  "hobbies": ["string"]
+}`;
+
+    let contents: any[] = [];
+    if (fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
+      contents = [
+        {
+          inlineData: {
+            mimeType: 'application/pdf',
+            data: fileBase64
+          }
+        },
+        { text: systemPrompt }
+      ];
+    } else {
+      contents = [
+        { text: `${systemPrompt}\n\nVoici le contenu du CV à analyser :\n\n${rawText || fileBase64 || ''}` }
+      ];
+    }
+
+    const response = await aiClient.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const parsedJson = JSON.parse(response.text?.trim() || '{}');
+    res.json({
+      success: true,
+      data: parsedJson
+    });
+  } catch (err: any) {
+    console.error('Erreur extraction CV IA:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || "Erreur lors de l'analyse du document par l'IA."
+    });
+  }
+});
+
 // 3. Webhook pour notifications serveur-à-serveur Mobile Money (MTN / Moov / FedaPay)
 app.post('/api/payments/webhook', (req, res) => {
   const signature = req.headers['x-fedapay-signature'] || req.headers['x-webhook-signature'];

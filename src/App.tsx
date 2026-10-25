@@ -249,42 +249,46 @@ export default function App() {
       )}
 
       {/* Modale Juridique (CGU, APDP, Confidentialité, Remboursement) */}
-      <LegalModal topic={legalTopic} onClose={() => setLegalTopic(null)} />
+      {legalTopic && <LegalModal topic={legalTopic} onClose={() => setLegalTopic(null)} />}
 
       {/* Modale d'authentification */}
-      <AuthModal
-        isOpen={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
-        onLoginSuccess={(u) => {
-          setCurrentUser(u);
-          refreshData();
-        }}
-      />
+      {authModalOpen && (
+        <AuthModal
+          isOpen={authModalOpen}
+          onClose={() => setAuthModalOpen(false)}
+          onLoginSuccess={(u) => {
+            setCurrentUser(u);
+            refreshData();
+          }}
+        />
+      )}
 
       {/* Modale de Paiement Mobile Money Bénin */}
-      <PaymentModal
-        plan={selectedPlanForPayment}
-        currentUser={
-          currentUser || {
-            id: 'guest_user',
-            email: 'candidat@cvprobenin.bj',
-            firstName: 'Candidat',
-            lastName: 'Bénin',
-            countryCode: 'BJ',
-            role: 'user',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+      {selectedPlanForPayment && (
+        <PaymentModal
+          plan={selectedPlanForPayment}
+          currentUser={
+            currentUser || {
+              id: 'guest_user',
+              email: 'candidat@cvprobenin.bj',
+              firstName: 'Candidat',
+              lastName: 'Bénin',
+              countryCode: 'BJ',
+              role: 'user',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
           }
-        }
-        onClose={() => {
-          setSelectedPlanForPayment(null);
-          refreshData();
-        }}
-        onOrderCreated={() => {
-          refreshData();
-        }}
-        onPaymentSuccess={handlePaymentSuccess}
-      />
+          onClose={() => {
+            setSelectedPlanForPayment(null);
+            refreshData();
+          }}
+          onOrderCreated={() => {
+            refreshData();
+          }}
+          onPaymentSuccess={handlePaymentSuccess}
+        />
+      )}
 
       {/* Modale d'Importation de CV */}
       {importModalOpen && (

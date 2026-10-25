@@ -35,10 +35,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   plan,
   currentUser,
   onClose,
-  onOrderCreated
+  onOrderCreated,
+  onPaymentSuccess
 }) => {
-  if (!plan) return null;
-
   const [activeStep, setActiveStep] = useState<'instructions' | 'declare' | 'submitted'>('instructions');
   const [currentOrder, setCurrentOrder] = useState<ManualPaymentOrder | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
@@ -46,7 +45,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   // Champs de la déclaration
   const [transactionRef, setTransactionRef] = useState<string>('');
-  const [amountDeclared, setAmountDeclared] = useState<number>(plan.priceXOF);
+  const [amountDeclared, setAmountDeclared] = useState<number>(plan ? plan.priceXOF : 0);
   const [senderPhone, setSenderPhone] = useState<string>(currentUser.phoneNumber || '');
   const [transactionDate, setTransactionDate] = useState<string>(() => {
     const now = new Date();
@@ -59,6 +58,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   // Initialisation de la commande à l'ouverture de la modale
   useEffect(() => {
     if (plan && plan.priceXOF > 0) {
+      setAmountDeclared(plan.priceXOF);
       const res = paymentService.createOrder({
         userId: currentUser.id,
         userEmail: currentUser.email,
@@ -71,6 +71,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       }
     }
   }, [plan, currentUser]);
+
+  if (!plan) return null;
 
   const handleCopyNumber = () => {
     navigator.clipboard.writeText(MOOV_MONEY_BENEFICIARY.phoneNumber);
