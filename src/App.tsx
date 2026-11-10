@@ -34,13 +34,14 @@ const GUEST_USER_FALLBACK: UserProfile = {
   updatedAt: '2026-01-01T00:00:00.000Z'
 };
 
-const getTabFromPath = (path: string): string => {
-  if (path === '/admin') return 'admin';
-  if (path === '/mon-compte') return 'dashboard';
-  if (path === '/builder') return 'builder';
-  if (path === '/templates') return 'templates';
-  if (path === '/tarifs' || path === '/pricing') return 'pricing';
-  if (path === '/conseils') return 'tips';
+const getTabFromPath = (path: string, hash?: string): string => {
+  const currentHash = hash !== undefined ? hash : (typeof window !== 'undefined' ? window.location.hash : '');
+  if (currentHash === '#admin' || currentHash === '#/admin' || path === '/admin' || path.startsWith('/admin')) return 'admin';
+  if (currentHash === '#mon-compte' || currentHash === '#dashboard' || path === '/mon-compte') return 'dashboard';
+  if (currentHash === '#builder' || path === '/builder') return 'builder';
+  if (currentHash === '#templates' || path === '/templates') return 'templates';
+  if (currentHash === '#tarifs' || currentHash === '#pricing' || path === '/tarifs' || path === '/pricing') return 'pricing';
+  if (currentHash === '#conseils' || path === '/conseils') return 'tips';
   return 'home';
 };
 
@@ -57,7 +58,7 @@ const getPathFromTab = (tab: string): string => {
 export default function App() {
   const [currentTab, setCurrentTab] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      return getTabFromPath(window.location.pathname);
+      return getTabFromPath(window.location.pathname, window.location.hash);
     }
     return 'home';
   });
@@ -88,13 +89,17 @@ export default function App() {
   }, [currentTab]);
 
   useEffect(() => {
-    const handlePopState = () => {
-      const poppedTab = getTabFromPath(window.location.pathname);
+    const handleUrlChange = () => {
+      const poppedTab = getTabFromPath(window.location.pathname, window.location.hash);
       setCurrentTab(poppedTab);
     };
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    window.addEventListener('popstate', handleUrlChange);
+    window.addEventListener('hashchange', handleUrlChange);
+    return () => {
+      window.removeEventListener('popstate', handleUrlChange);
+      window.removeEventListener('hashchange', handleUrlChange);
+    };
   }, []);
 
   const handleNavigate = (tab: string) => {
@@ -104,8 +109,16 @@ export default function App() {
     }
     setCurrentTab(tab);
     const targetPath = getPathFromTab(tab);
-    if (window.location.pathname !== targetPath) {
-      window.history.pushState({ tab }, '', targetPath);
+    if (tab === 'admin') {
+      if (window.location.hash !== '#admin') {
+        window.location.hash = '#admin';
+      }
+    } else {
+      if (window.location.hash === '#admin') {
+        window.history.replaceState(null, '', targetPath);
+      } else if (window.location.pathname !== targetPath) {
+        window.history.pushState({ tab }, '', targetPath);
+      }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -324,7 +337,14 @@ export default function App() {
 
         {/* 7. CONSOLE D'ADMINISTRATION */}
         {currentTab === 'admin' && (
-          <AdminPanel onBack={() => handleNavigate('home')} />
+          <AdminPanel
+            onBack={() => handleNavigate('home')}
+            currentUser={currentUser}
+            onLoginSuccess={(u) => {
+              setCurrentUser(u);
+              refreshData();
+            }}
+          />
         )}
       </div>
 

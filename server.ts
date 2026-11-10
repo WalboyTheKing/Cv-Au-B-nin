@@ -10,6 +10,8 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
+import mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
 
 dotenv.config();
 
@@ -17,7 +19,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = parseInt(process.env.PORT || '3000', 10);
+// En conformité avec AI Studio, le serveur écoute exclusivement sur le port 3000
+const port = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -181,12 +184,17 @@ function saveOrders(orders: any[]): void {
   }
 }
 
-// Initialisation de Google Gen AI côté serveur (clé protégée)
+// Initialisation sécurisée de Google Gen AI côté serveur (clé protégée)
 let aiClient: GoogleGenAI | null = null;
-try {
-  aiClient = new GoogleGenAI();
-} catch (e) {
-  console.error('Erreur initialisation Gemini API serveur', e);
+function getAiClient(): GoogleGenAI | null {
+  if (!aiClient && process.env.GEMINI_API_KEY) {
+    try {
+      aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    } catch (e) {
+      console.error('Erreur initialisation Gemini API serveur', e);
+    }
+  }
+  return aiClient;
 }
 
 function callWithTimeout<T>(promiseFn: () => Promise<T>, timeoutMs = 10000): Promise<T> {
@@ -1394,8 +1402,9 @@ app.get('/api/config', (req, res) => {
 // 2. Proxy d'assistance à la rédaction IA (clé non exposée au client)
 app.post('/api/ai/enhance', async (req, res) => {
   const { type, text, jobTitle, context } = req.body;
+  const client = getAiClient();
 
-  if (!aiClient) {
+  if (!client) {
     return res.json({
       success: false,
       isAI: false,
@@ -1427,7 +1436,7 @@ Renvoie directement le texte reformulé.`;
       try {
         const response = await callWithTimeout(
           () =>
-            aiClient.models.generateContent({
+            client.models.generateContent({
               model,
               contents: prompt
             }),
@@ -1461,14 +1470,97 @@ Renvoie directement le texte reformulé.`;
   }
 });
 
-// 3. Analyse et extraction intelligente de CV (PDF, DOCX, TXT) via Gemini AI
+// 3. Extraction textuelle propre de document (PDF, DOCX, TXT)
+app.post('/api/cv/extract-text', async (req, res) => {
+  try {
+    const { fileBase64, mimeType, fileName, text } = req.body;
+    if (text && typeof text === 'string' && text.trim().length > 0) {
+      return res.json({ success: true, text: text.trim() });
+    }
+    if (!fileBase64) {
+      return res.status(400).json({ success: false, error: 'Aucun contenu fourni.' });
+    }
+
+    const buffer = Buffer.from(fileBase64, 'base64');
+    const nameLower = (fileName || '').toLowerCase();
+    const isPDF = mimeType === 'application/pdf' || nameLower.endsWith('.pdf');
+    const isDOCX = nameLower.endsWith('.docx') || nameLower.endsWith('.doc') || (mimeType && mimeType.includes('word'));
+
+    let extractedText = '';
+
+    if (isPDF) {
+      try {
+        const parser = new PDFParse({ data: buffer });
+        const result = await parser.getText();
+        if (result && result.text) {
+          extractedText = result.text.trim();
+        }
+      } catch (pdfErr) {
+        console.warn('[PDFParse Server Warning]', pdfErr);
+      }
+    } else if (isDOCX) {
+      try {
+        const docResult = await mammoth.extractRawText({ buffer });
+        if (docResult && docResult.value) {
+          extractedText = docResult.value.trim();
+        }
+      } catch (mErr) {
+        console.warn('[DOCX Mammoth Server Warning]', mErr);
+      }
+    } else {
+      extractedText = buffer.toString('utf-8');
+    }
+
+    res.json({
+      success: true,
+      text: extractedText
+    });
+  } catch (err: any) {
+    console.error('Erreur extraction textuelle serveur:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Erreur lors de l’extraction textuelle.'
+    });
+  }
+});
+
+// 4. Analyse et extraction intelligente de CV (PDF, DOCX, TXT)
 app.post('/api/cv/parse', async (req, res) => {
   const { fileBase64, mimeType, fileName, rawText } = req.body;
+  let docText = rawText || '';
 
-  if (!aiClient) {
-    return res.status(503).json({
-      success: false,
-      message: 'Moteur IA Gemini non configuré sur le serveur.'
+  // Extraction PDF propre via PDFParse côté serveur si non fournie
+  if ((!docText || docText.length < 20) && fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
+    try {
+      const buffer = Buffer.from(fileBase64, 'base64');
+      const parser = new PDFParse({ data: buffer });
+      const result = await parser.getText();
+      if (result && result.text) {
+        docText = result.text.trim();
+      }
+    } catch (pErr) {
+      console.warn('[Server PDFParse during parse error]', pErr);
+    }
+  } else if ((!docText || docText.length < 20) && fileBase64 && (fileName?.toLowerCase().endsWith('.docx') || fileName?.toLowerCase().endsWith('.doc'))) {
+    try {
+      const buffer = Buffer.from(fileBase64, 'base64');
+      const docResult = await mammoth.extractRawText({ buffer });
+      if (docResult.value) {
+        docText = docResult.value.trim();
+      }
+    } catch (mErr) {
+      console.warn('[Server Mammoth during parse error]', mErr);
+    }
+  }
+
+  const client = getAiClient();
+
+  if (!client) {
+    return res.json({
+      success: true,
+      isAI: false,
+      rawText: docText,
+      message: 'Extraction textuelle directe effectuée avec succès.'
     });
   }
 
@@ -1560,6 +1652,19 @@ Format JSON attendu :
   "hobbies": ["string"]
 }`;
 
+    let docText = rawText || '';
+    if (!docText && fileBase64 && (fileName?.toLowerCase().endsWith('.docx') || fileName?.toLowerCase().endsWith('.doc'))) {
+      try {
+        const buffer = Buffer.from(fileBase64, 'base64');
+        const docResult = await mammoth.extractRawText({ buffer });
+        if (docResult.value) {
+          docText = docResult.value;
+        }
+      } catch (mErr) {
+        console.warn('[DOCX Mammoth Server Error]', mErr);
+      }
+    }
+
     let contents: any[] = [];
     if (fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
       contents = [
@@ -1573,7 +1678,7 @@ Format JSON attendu :
       ];
     } else {
       contents = [
-        { text: `${systemPrompt}\n\nVoici le contenu du CV à analyser :\n\n${rawText || fileBase64 || ''}` }
+        { text: `${systemPrompt}\n\nVoici le contenu du CV à analyser :\n\n${docText || fileBase64 || ''}` }
       ];
     }
 
@@ -1585,7 +1690,7 @@ Format JSON attendu :
       try {
         const response = await callWithTimeout(
           () =>
-            aiClient.models.generateContent({
+            client.models.generateContent({
               model,
               contents,
               config: {
@@ -1644,7 +1749,10 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);

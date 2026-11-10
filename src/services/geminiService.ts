@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GoogleGenAI } from '@google/genai';
-
 interface AIEnhanceOptions {
   type: 'summary' | 'experience' | 'skills' | 'grammar';
   text?: string;
@@ -16,17 +14,6 @@ export interface AIEnhanceResult {
   content: string;
   suggestions?: string[];
   isAI: boolean;
-}
-
-// Initialisation sécurisée du client Gemini
-const apiKey = process.env.GEMINI_API_KEY || (typeof window !== 'undefined' ? (window as unknown as { __GEMINI_KEY?: string }).__GEMINI_KEY : '');
-let aiClient: GoogleGenAI | null = null;
-if (apiKey) {
-  try {
-    aiClient = new GoogleGenAI({ apiKey });
-  } catch {
-    aiClient = null;
-  }
 }
 
 export async function enhanceWithAI(options: AIEnhanceOptions): Promise<AIEnhanceResult> {

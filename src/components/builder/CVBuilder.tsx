@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BENIN_CITIES,
   BENIN_INSTITUTIONS,
@@ -24,6 +24,7 @@ import { storageService } from '../../services/storage';
 import { generateCVPdf, triggerPrintDialog } from '../../services/pdfGenerator';
 import { enhanceWithAI } from '../../services/geminiService';
 import { CVRenderer } from '../templates/CVRenderer';
+import { TemplateGallery } from '../templates/TemplateGallery';
 import {
   User,
   FileText,
@@ -48,7 +49,13 @@ import {
   Printer,
   ChevronDown,
   ChevronUp,
-  Image as ImageIcon
+  Image as ImageIcon,
+  LayoutGrid,
+  Maximize2,
+  X,
+  Sliders,
+  Check,
+  Share2
 } from 'lucide-react';
 
 interface CVBuilderProps {
@@ -115,31 +122,38 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [isAILoading, setIsAILoading] = useState<boolean>(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState<string>('Enregistré');
   const [exportError, setExportError] = useState<string | null>(null);
+
+  // Auto-save avec horodatage réel
+  const [autoSaveStatus, setAutoSaveStatus] = useState<string>('Enregistré');
+  const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
+  const [showFullscreenPreview, setShowFullscreenPreview] = useState<boolean>(false);
 
   // Mise à jour de l'échelle selon l'écran au montage
   useEffect(() => {
     if (window.innerWidth < 1024) {
       setPreviewScale(0.48);
     } else if (window.innerWidth < 1440) {
-      setPreviewScale(0.75);
+      setPreviewScale(0.72);
     } else {
-      setPreviewScale(0.88);
+      setPreviewScale(0.85);
     }
   }, []);
 
-  // Sauvegarde automatique avec anti-rebond
+  // Sauvegarde automatique avec anti-rebond et affichage de l'heure exacte
   useEffect(() => {
     setAutoSaveStatus('Enregistrement...');
     const timer = setTimeout(() => {
       storageService.saveCV(cv);
-      setAutoSaveStatus('Enregistré automatiquement');
+      const d = new Date();
+      const hours = d.getHours().toString().padStart(2, '0');
+      const minutes = d.getMinutes().toString().padStart(2, '0');
+      setAutoSaveStatus(`Enregistré automatiquement à ${hours}:${minutes}`);
     }, 600);
     return () => clearTimeout(timer);
   }, [cv]);
 
-  // Vérification stricte des droits Premium pour CE CV spécifiquement
+  // Droits d'accès
   const now = Date.now();
   const cvExpiresTime = cv.access?.expiresAt ? new Date(cv.access.expiresAt).getTime() : 0;
   const isCVPremiumActive = Boolean(
@@ -153,7 +167,6 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     cvExpiresTime <= now
   );
 
-  // Droits actifs : spécifiques à ce CV ou tolérance compte admin/abonné
   const hasActiveAccess = isCVPremiumActive || Boolean(
     currentUser?.subscription?.status === 'active' &&
     new Date(currentUser.subscription.expiresAt).getTime() > now &&
@@ -164,6 +177,8 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   );
 
   const isPremiumUser = hasActiveAccess;
+
+  const currentTemplate = CV_TEMPLATES.find((t) => t.id === cv.settings.templateId) || CV_TEMPLATES[0];
 
   const steps = [
     { num: 1, label: 'Identité', icon: <User className="w-4 h-4" /> },
@@ -178,7 +193,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     { num: 10, label: 'Téléchargement', icon: <Download className="w-4 h-4" /> }
   ];
 
-  // Gestion des champs d'identité
+  // Mise à jour de l'identité
   const updatePersonalInfo = (field: string, value: string) => {
     setCV((prev) => ({
       ...prev,
@@ -189,7 +204,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     }));
   };
 
-  // Upload d'image de profil en local
+  // Upload d'image de profil
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -244,67 +259,156 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     }
   };
 
+  // Changement de modèle
+  const handleSelectTemplate = (templateId: string) => {
+    const tpl = CV_TEMPLATES.find((t) => t.id === templateId);
+    setCV((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        templateId,
+        primaryColor: tpl ? tpl.defaultColor : prev.settings.primaryColor
+      }
+    }));
+    setShowTemplateModal(false);
+  };
+
+  const [copyShareFeedback, setCopyShareFeedback] = useState<boolean>(false);
+
+  const handleShareLink = () => {
+    try {
+      const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}#builder` : '';
+      if (navigator.clipboard && shareUrl) {
+        navigator.clipboard.writeText(shareUrl);
+        setCopyShareFeedback(true);
+        setTimeout(() => setCopyShareFeedback(false), 3000);
+      }
+    } catch (e) {
+      console.warn('Clipboard write error', e);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col">
-      {/* Barre supérieure de l'éditeur */}
-      <div className="bg-white border-b border-slate-200 px-4 py-3 sticky top-16 z-30 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            value={cv.title}
-            onChange={(e) => setCV({ ...cv, title: e.target.value })}
-            className="font-bold text-sm text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white px-2 py-1 rounded border border-transparent hover:border-slate-300 focus:border-emerald-600 outline-hidden transition-colors w-60 sm:w-80 truncate"
-            title="Cliquez pour renommer ce CV"
-          />
-          <span className="text-[11px] text-slate-400 font-medium hidden sm:inline-block">
-            • {autoSaveStatus}
+      {/* ==================================================================== */}
+      {/* 1. ZONE SUPÉRIEURE : EN-TÊTE ÉDITEUR                                */}
+      {/* ==================================================================== */}
+      <div className="bg-white border-b border-slate-200 px-3 sm:px-6 py-2.5 sticky top-16 z-30 flex items-center justify-between gap-3 shadow-2xs">
+        {/* Titre et statut de sauvegarde */}
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="relative group">
+            <input
+              type="text"
+              value={cv.title}
+              onChange={(e) => setCV({ ...cv, title: e.target.value })}
+              className="font-black text-sm sm:text-base text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white px-2 py-1 rounded-lg border border-transparent hover:border-slate-300 focus:border-emerald-600 outline-hidden transition-colors w-48 sm:w-72 truncate"
+              title="Cliquez pour renommer ce CV"
+            />
+          </div>
+          <span className="text-[11px] text-slate-400 font-medium hidden md:inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            {autoSaveStatus}
           </span>
         </div>
 
-        {/* Contrôles et bascule mobile */}
-        <div className="flex items-center gap-2">
-          {/* Bascule Mobile (Formulaire vs Aperçu) */}
-          <div className="lg:hidden flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-bold">
+        {/* Boutons d'action rapides */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Bascule Mobile (Éditer / Aperçu) */}
+          <div className="lg:hidden flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-bold">
             <button
               onClick={() => setActiveTabMobile('edit')}
-              className={`px-3 py-1 rounded-md transition-colors ${
-                activeTabMobile === 'edit' ? 'bg-white shadow-2xs text-emerald-800' : 'text-slate-600'
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                activeTabMobile === 'edit'
+                  ? 'bg-white shadow-2xs text-emerald-800 font-black'
+                  : 'text-slate-600'
               }`}
             >
-              Édition
+              Modifier
             </button>
             <button
               onClick={() => setActiveTabMobile('preview')}
-              className={`px-3 py-1 rounded-md transition-colors ${
-                activeTabMobile === 'preview' ? 'bg-white shadow-2xs text-emerald-800' : 'text-slate-600'
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                activeTabMobile === 'preview'
+                  ? 'bg-white shadow-2xs text-emerald-800 font-black'
+                  : 'text-slate-600'
               }`}
             >
               Aperçu A4
             </button>
           </div>
 
+          {/* Bouton "Changer de modèle" (ouvre la galerie des 15 modèles) */}
+          <button
+            onClick={() => setShowTemplateModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 rounded-xl transition-all border border-slate-200 cursor-pointer"
+            title="Choisir parmi les 15 modèles officiels"
+          >
+            <LayoutGrid className="w-3.5 h-3.5 text-emerald-700" />
+            <span className="hidden sm:inline">Modèle :</span>
+            <span className="text-emerald-800 font-extrabold truncate max-w-24 sm:max-w-none">
+              {currentTemplate.name}
+            </span>
+          </button>
+
+          {/* Bouton Aperçu Plein Écran */}
+          <button
+            onClick={() => setShowFullscreenPreview(true)}
+            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+            title="Aperçu A4 Plein Écran"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Plein écran</span>
+          </button>
+
+          {/* Imprimer */}
           <button
             onClick={() => triggerPrintDialog()}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+            className="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
             title="Imprimer directement"
           >
-            <Printer className="w-3.5 h-3.5" />
+            <Printer className="w-3.5 h-3.5 text-slate-500" />
             <span>Imprimer</span>
           </button>
 
+          {/* Partager */}
+          <button
+            onClick={handleShareLink}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+            title="Copier le lien du CV"
+          >
+            {copyShareFeedback ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-emerald-700 font-bold">Lien copié !</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="w-3.5 h-3.5 text-slate-500" />
+                <span>Partager</span>
+              </>
+            )}
+          </button>
+
+          {/* Télécharger PDF */}
           <button
             onClick={handleDownloadPDF}
             disabled={isExporting}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg shadow-sm transition-all"
+            className="flex items-center gap-1.5 px-3.5 sm:px-4 py-1.5 text-xs font-extrabold bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{isExporting ? `Export (${exportProgress}%)` : hasActiveAccess ? 'Télécharger PDF Pro' : 'Télécharger (avec filigrane)'}</span>
+            <span>
+              {isExporting
+                ? `Export (${exportProgress}%)`
+                : hasActiveAccess
+                ? 'Télécharger PDF'
+                : 'Télécharger (Découverte)'}
+            </span>
           </button>
         </div>
       </div>
 
-      {/* Bandeau d'état des droits commerciaux sur ce CV */}
-      <div className="border-b px-4 py-2 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 transition-all">
+      {/* Bandeau d'état des droits commerciaux Moov Money */}
+      <div className="bg-white border-b border-slate-200 px-4 py-2 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
         {hasActiveAccess ? (
           <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 flex items-center justify-between text-emerald-900">
             <div className="flex items-center gap-2">
@@ -329,14 +433,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                <strong>Accès expiré pour ce CV</strong> (expiré le{' '}
-                {cv.access?.expiresAt
-                  ? new Date(cv.access.expiresAt).toLocaleString('fr-FR', {
-                      dateStyle: 'short',
-                      timeStyle: 'short'
-                    })
-                  : 'N/A'}
-                ). Vos données sont conservées. Les exports comportent un filigrane standard.
+                <strong>Accès expiré pour ce CV</strong>. Vos données sont conservées. Les exports comportent un filigrane standard.
               </span>
             </div>
             <button
@@ -347,11 +444,11 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             </button>
           </div>
         ) : (
-          <div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-slate-700">
+          <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-slate-700">
             <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+              <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>
-                <strong>Brouillon non payé</strong> • Sauvegarde automatique active. Export sans filigrane réservé aux offres vérifiées Moov Money (500 FCFA / 24h ou 1 000 FCFA / 30j).
+                <strong>Brouillon non payé</strong> • Sauvegarde automatique active. Export sans filigrane disponible via Moov Money (500 FCFA / 24h ou 1 000 FCFA / 30j).
               </span>
             </div>
             <button
@@ -379,9 +476,11 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
         </div>
       )}
 
-      {/* Disposition principale à 3 zones sur Desktop */}
+      {/* ==================================================================== */}
+      {/* 2. DISPOSITION PRINCIPALE À 3 ZONES SUR DESKTOP                     */}
+      {/* ==================================================================== */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 max-w-400 mx-auto w-full">
-        {/* ZONE 1 : Barre de navigation des étapes (Desktop à gauche) */}
+        {/* Navigation des 10 étapes (Desktop colonne latérale) */}
         <aside className="hidden lg:block lg:col-span-2 bg-white border-r border-slate-200 p-4 space-y-1 overflow-y-auto">
           <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-3 px-2">
             Étapes de création
@@ -404,7 +503,15 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             );
           })}
 
-          <div className="pt-6 border-t border-slate-200 mt-6 px-2">
+          <div className="pt-6 border-t border-slate-200 mt-6 px-2 space-y-3">
+            <button
+              onClick={() => setShowTemplateModal(true)}
+              className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors border border-slate-200 cursor-pointer"
+            >
+              <LayoutGrid className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Changer de modèle</span>
+            </button>
+
             <div className="text-[11px] font-bold text-slate-900 mb-1">Votre Formule</div>
             <div className="text-[10px] text-slate-500 mb-3">
               {isPremiumUser ? 'Premium actif (Sans filigrane)' : 'Formule Découverte gratuite'}
@@ -412,7 +519,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             {!isPremiumUser && (
               <button
                 onClick={onOpenPricing}
-                className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
               >
                 <Sparkles className="w-3 h-3 text-amber-600" />
                 <span>Passer en Premium (500 F)</span>
@@ -421,13 +528,13 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
           </div>
         </aside>
 
-        {/* ZONE 2 : Formulaire d'édition (Centre) */}
+        {/* ZONE GAUCHE : Formulaire d'édition pas à pas */}
         <main
-          className={`lg:col-span-5 bg-white lg:border-r border-slate-200 p-6 overflow-y-auto ${
+          className={`lg:col-span-5 bg-white lg:border-r border-slate-200 p-4 sm:p-6 overflow-y-auto ${
             activeTabMobile === 'preview' ? 'hidden lg:block' : 'block'
           }`}
         >
-          {/* Navigation d'étape mobile */}
+          {/* En-tête mobile de l'étape */}
           <div className="lg:hidden flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
             <span className="text-xs font-bold text-emerald-800">
               Étape {currentStep} sur {steps.length} : {steps[currentStep - 1].label}
@@ -436,21 +543,21 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
               <button
                 disabled={currentStep === 1}
                 onClick={() => setCurrentStep((c) => Math.max(1, c - 1))}
-                className="p-1 rounded bg-slate-100 disabled:opacity-30"
+                className="p-1.5 rounded-lg bg-slate-100 disabled:opacity-30"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
               <button
                 disabled={currentStep === steps.length}
                 onClick={() => setCurrentStep((c) => Math.min(steps.length, c + 1))}
-                className="p-1 rounded bg-slate-100 disabled:opacity-30"
+                className="p-1.5 rounded-lg bg-slate-100 disabled:opacity-30"
               >
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </div>
 
-          {/* Formulaires étape par étape */}
+          {/* Formulaires d'étape */}
           {currentStep === 1 && (
             <StepPersonalInfo
               cv={cv}
@@ -478,7 +585,13 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
 
           {currentStep === 7 && <StepCustomSections cv={cv} setCV={setCV} />}
 
-          {currentStep === 8 && <StepDesign cv={cv} setCV={setCV} />}
+          {currentStep === 8 && (
+            <StepDesign
+              cv={cv}
+              setCV={setCV}
+              onOpenGallery={() => setShowTemplateModal(true)}
+            />
+          )}
 
           {currentStep === 9 && <StepValidation cv={cv} onGoToStep={setCurrentStep} />}
 
@@ -489,11 +602,12 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
               onDownload={handleDownloadPDF}
               onPrint={triggerPrintDialog}
               onOpenPricing={onOpenPricing}
+              onShare={handleShareLink}
               isExporting={isExporting}
             />
           )}
 
-          {/* Boutons Suivant / Précédent */}
+          {/* Navigation Suivant / Précédent */}
           <div className="mt-8 pt-4 border-t border-slate-200 flex justify-between items-center">
             {currentStep > 1 ? (
               <button
@@ -508,7 +622,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             {currentStep < steps.length ? (
               <button
                 onClick={() => setCurrentStep((s) => s + 1)}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
               >
                 <span>Étape suivante : {steps[currentStep].label}</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -516,7 +630,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             ) : (
               <button
                 onClick={handleDownloadPDF}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 flex items-center gap-1.5 shadow-sm"
+                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Télécharger mon CV PDF</span>
@@ -525,55 +639,239 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
           </div>
         </main>
 
-        {/* ZONE 3 : Prévisualisation fidèle en temps réel (Droite) */}
+        {/* ==================================================================== */}
+        {/* 3. ZONE CENTRALE : APERÇU A4 EN DIRECT AVEC ZOOM ET MULTI-PAGES     */}
+        {/* ==================================================================== */}
         <aside
-          className={`lg:col-span-5 bg-slate-300/60 p-4 sm:p-6 overflow-y-auto flex flex-col items-center ${
+          className={`lg:col-span-5 bg-slate-200/80 p-3 sm:p-6 overflow-y-auto flex flex-col items-center min-h-[700px] ${
             activeTabMobile === 'edit' ? 'hidden lg:flex' : 'flex'
           }`}
         >
-          {/* Barre d'outils du visualiseur */}
-          <div className="w-full max-w-[210mm] bg-white rounded-xl shadow-xs border border-slate-200 p-2 mb-4 flex items-center justify-between text-xs font-semibold text-slate-700">
-            <div className="flex items-center gap-2">
-              <span className="text-slate-400 text-[11px]">Zoom :</span>
+          {/* Barre d'outils du visualiseur A4 */}
+          <div className="w-full max-w-[210mm] bg-white rounded-xl shadow-xs border border-slate-200 p-2 mb-4 flex items-center justify-between text-xs font-semibold text-slate-700 gap-2">
+            {/* Contrôles de zoom prédéfinis */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-400 text-[11px] hidden sm:inline">Zoom :</span>
               <button
                 onClick={() => setPreviewScale((s) => Math.max(0.4, Number((s - 0.05).toFixed(2))))}
-                className="p-1 hover:bg-slate-100 rounded"
+                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600"
                 title="Dézoomer"
               >
                 <ZoomOut className="w-3.5 h-3.5" />
               </button>
-              <span className="font-mono text-xs">{Math.round(previewScale * 100)}%</span>
+              
+              <div className="flex items-center gap-1">
+                {[0.5, 0.75, 1.0, 1.25].map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => setPreviewScale(preset)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all ${
+                      Math.abs(previewScale - preset) < 0.03
+                        ? 'bg-slate-900 text-white font-bold'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {Math.round(preset * 100)}%
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    if (window.innerWidth < 1024) setPreviewScale(0.48);
+                    else if (window.innerWidth < 1440) setPreviewScale(0.72);
+                    else setPreviewScale(0.85);
+                  }}
+                  className="px-2 py-0.5 rounded text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium"
+                  title="Adapter à l'écran"
+                >
+                  Adapter
+                </button>
+              </div>
+
               <button
-                onClick={() => setPreviewScale((s) => Math.min(1.2, Number((s + 0.05).toFixed(2))))}
-                className="p-1 hover:bg-slate-100 rounded"
+                onClick={() => setPreviewScale((s) => Math.min(1.4, Number((s + 0.05).toFixed(2))))}
+                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600"
                 title="Zoomer"
               >
                 <ZoomIn className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            <div className="text-[11px] text-slate-500 font-medium">
-              Format A4 (210 x 297 mm)
+            {/* Infos format & Plein écran */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
+                A4 (210×297 mm)
+              </span>
+              <button
+                onClick={() => setShowFullscreenPreview(true)}
+                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 cursor-pointer"
+                title="Aperçu Plein Écran"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
 
-          {/* Rendu dynamique du CV */}
-          <div className="w-full flex justify-center pb-12">
-            <CVRenderer
-              cv={cv}
-              scale={previewScale}
-              showWatermark={!isPremiumUser}
-            />
+          {/* Barre de changement rapide de modèle en 1 clic */}
+          <div className="w-full max-w-[210mm] bg-white rounded-xl shadow-xs border border-slate-200 p-2 mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                <LayoutGrid className="w-3 h-3 text-emerald-700" />
+                Changer de modèle en 1 clic (15 styles) :
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowTemplateModal(true)}
+                className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
+              >
+                Galerie complète →
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+              {CV_TEMPLATES.map((tpl) => {
+                const isSelected = cv.settings.templateId === tpl.id;
+                return (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => handleSelectTemplate(tpl.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition-all flex items-center gap-1 cursor-pointer ${
+                      isSelected
+                        ? 'bg-emerald-700 text-white shadow-xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                    }`}
+                    title={`${tpl.name} (${tpl.styleLabel})`}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: tpl.defaultColor }}
+                    />
+                    <span>{tpl.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Rendu dynamique du CV dans son conteneur A4 réaliste */}
+          <div className="w-full flex flex-col items-center pb-16">
+            <div className="relative">
+              <CVRenderer
+                cv={cv}
+                scale={previewScale}
+                showWatermark={!isPremiumUser}
+              />
+
+              {/* Ligne de démarcation de pagination A4 à 297mm */}
+              <div
+                className="pointer-events-none absolute left-0 right-0 border-b-2 border-dashed border-red-400/60 z-20"
+                style={{
+                  top: `${297 * 3.7795275591 * previewScale}px`
+                }}
+              >
+                <span className="absolute -top-3 right-4 bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.5 rounded shadow-2xs border border-red-200">
+                  Limite Page 1 (297 mm)
+                </span>
+              </div>
+            </div>
           </div>
         </aside>
       </div>
+
+      {/* ==================================================================== */}
+      {/* 4. MODALE DE SÉLECTION COMPLÈTE DE MODÈLE (15 MODÈLES / 8 CATÉGORIES) */}
+      {/* ==================================================================== */}
+      {showTemplateModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-6xl w-full p-6 sm:p-8 max-h-[92vh] overflow-y-auto space-y-6 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+            {/* Bouton fermer */}
+            <button
+              onClick={() => setShowTemplateModal(false)}
+              className="absolute top-5 right-5 p-2 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <TemplateGallery
+              selectedTemplateId={cv.settings.templateId}
+              onSelectTemplate={handleSelectTemplate}
+              cv={cv}
+              title="Choisissez votre modèle parmi nos 15 styles officiels"
+              subtitle="Le contenu de votre CV est préservé à 100%. Changez de modèle instantanément pour trouver le style qui valorise le mieux votre profil."
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* 5. MODALE D'APERÇU PLEIN ÉCRAN                                      */}
+      {/* ==================================================================== */}
+      {showFullscreenPreview && (
+        <div className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-md flex flex-col p-4 sm:p-6 overflow-hidden animate-in fade-in duration-150">
+          <div className="flex items-center justify-between text-white pb-4 border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-3">
+              <h3 className="font-extrabold text-base sm:text-lg">{cv.title}</h3>
+              <span className="text-xs text-white/60">
+                • Modèle : {currentTemplate.name}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleShareLink}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                title="Copier le lien"
+              >
+                {copyShareFeedback ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Lien copié !</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>Partager</span>
+                  </>
+                )}
+              </button>
+              <button
+                onClick={triggerPrintDialog}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Imprimer</span>
+              </button>
+              <button
+                onClick={handleDownloadPDF}
+                className="px-4 py-1.5 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Télécharger PDF</span>
+              </button>
+              <button
+                onClick={() => setShowFullscreenPreview(false)}
+                className="p-1.5 rounded-full hover:bg-white/10 text-white/80 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto flex items-center justify-center py-6">
+            <CVRenderer
+              cv={cv}
+              scale={1.0}
+              showWatermark={!isPremiumUser}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-// ----------------------------------------------------------------------
-// SOUS-COMPOSANTS DES ÉTAPES DE SAISIE
-// ----------------------------------------------------------------------
+// ======================================================================
+// COMPOSANTS DES 10 ÉTAPES DE SAISIE
+// ======================================================================
 
 function StepPersonalInfo({
   cv,
@@ -603,7 +901,7 @@ function StepPersonalInfo({
             value={info.firstName}
             onChange={(e) => updatePersonalInfo('firstName', e.target.value)}
             placeholder="Ex : Jean-Eudes"
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
           />
         </div>
 
@@ -614,7 +912,7 @@ function StepPersonalInfo({
             value={info.lastName}
             onChange={(e) => updatePersonalInfo('lastName', e.target.value)}
             placeholder="Ex : DOSSOU"
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
           />
         </div>
       </div>
@@ -628,7 +926,7 @@ function StepPersonalInfo({
           value={info.jobTitle}
           onChange={(e) => updatePersonalInfo('jobTitle', e.target.value)}
           placeholder="Ex : Ingénieur Logiciel / Comptable SYSCOHADA / Commercial"
-          className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
+          className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
         />
       </div>
 
@@ -640,7 +938,7 @@ function StepPersonalInfo({
             value={info.phone}
             onChange={(e) => updatePersonalInfo('phone', e.target.value)}
             placeholder="Ex : +229 97 12 34 56"
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
           />
         </div>
 
@@ -651,7 +949,7 @@ function StepPersonalInfo({
             value={info.email}
             onChange={(e) => updatePersonalInfo('email', e.target.value)}
             placeholder="Ex : jean.dossou@gmail.com"
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden"
           />
         </div>
       </div>
@@ -662,7 +960,7 @@ function StepPersonalInfo({
           <select
             value={info.city}
             onChange={(e) => updatePersonalInfo('city', e.target.value)}
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden bg-white"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden bg-white"
           >
             {BENIN_CITIES.map((c) => (
               <option key={c} value={c}>
@@ -678,7 +976,7 @@ function StepPersonalInfo({
             type="text"
             value={info.country}
             onChange={(e) => updatePersonalInfo('country', e.target.value)}
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-slate-50 text-slate-600 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 bg-slate-50 text-slate-600 outline-hidden"
           />
         </div>
       </div>
@@ -692,7 +990,7 @@ function StepPersonalInfo({
           value={info.address || ''}
           onChange={(e) => updatePersonalInfo('address', e.target.value)}
           placeholder="Ex : Haie Vive, Akpakpa, Calavi Kpota..."
-          className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:border-emerald-600 outline-hidden"
+          className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:border-emerald-600 outline-hidden"
         />
       </div>
 
@@ -704,7 +1002,7 @@ function StepPersonalInfo({
             value={info.linkedIn || ''}
             onChange={(e) => updatePersonalInfo('linkedIn', e.target.value)}
             placeholder="linkedin.com/in/nom-prenom"
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 outline-hidden"
           />
         </div>
 
@@ -715,17 +1013,17 @@ function StepPersonalInfo({
             value={info.website || ''}
             onChange={(e) => updatePersonalInfo('website', e.target.value)}
             placeholder="https://mon-portfolio.bj"
-            className="w-full text-xs p-2.5 rounded-lg border border-slate-300 outline-hidden"
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 outline-hidden"
           />
         </div>
       </div>
 
-      {/* Photo d'identité facultative */}
+      {/* Photo d'identité */}
       <div className="pt-2">
         <label className="block text-xs font-bold text-slate-700 mb-1">
-          Photo d'identité (Facultative — recommandée pour certains postes d'accueil ou de vente)
+          Photo d'identité (Facultative — recommandée pour les postes d'accueil ou de vente)
         </label>
-        <div className="flex items-center gap-4 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+        <div className="flex items-center gap-4 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
           {info.photoUrl ? (
             <img
               src={info.photoUrl}
@@ -742,12 +1040,12 @@ function StepPersonalInfo({
               type="file"
               accept="image/*"
               onChange={handlePhotoUpload}
-              className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
+              className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
             />
             {info.photoUrl && (
               <button
                 onClick={() => updatePersonalInfo('photoUrl', '')}
-                className="text-[11px] text-red-600 font-semibold hover:underline block"
+                className="text-[11px] text-red-600 font-semibold hover:underline block cursor-pointer"
               >
                 Supprimer la photo
               </button>
@@ -772,49 +1070,53 @@ function StepProfileSummary({
 }) {
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-start">
+      <div className="flex justify-between items-start gap-2">
         <div>
           <h2 className="text-base font-extrabold text-slate-900">2. Résumé de Profil Professionnel</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Présentez votre parcours, vos atouts majeurs et votre projet professionnel en 3 à 5 phrases percutantes.
+            Présentez votre parcours, vos atouts majeurs et votre projet en 3 à 5 phrases percutantes.
           </p>
         </div>
         <button
           onClick={onEnhance}
           disabled={isAILoading}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
         >
           <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-          <span>{isAILoading ? 'Amélioration...' : 'Améliorer avec l’IA'}</span>
+          <span>{isAILoading ? 'Optimisation...' : 'Améliorer avec l’IA'}</span>
         </button>
       </div>
 
       <div>
         <textarea
-          rows={6}
+          rows={5}
           value={cv.profileSummary}
           onChange={(e) => setCV({ ...cv, profileSummary: e.target.value })}
           placeholder="Ex : Professionnel rigoureux titulaire d'une formation à l'IFRI - UAC..."
-          className="w-full text-xs p-3 rounded-lg border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden leading-relaxed"
+          className="w-full text-xs p-3 rounded-xl border border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 outline-hidden leading-relaxed"
         />
+        <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1">
+          <span>Conseil : mettez en avant 1 chiffre clé ou une réalisation phare.</span>
+          <span>{cv.profileSummary?.length || 0} caractères</span>
+        </div>
       </div>
 
-      {/* Suggestions adaptées aux métiers au Bénin */}
+      {/* Suggestions adaptées aux secteurs au Bénin */}
       <div className="pt-2">
         <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-2">
-          Suggestions selon votre secteur :
+          Suggestions selon votre profil :
         </span>
         <div className="space-y-2">
           {PROFILE_SUMMARIES_EXAMPLES.map((item, idx) => (
             <div
               key={idx}
-              className="p-2.5 bg-slate-50 hover:bg-emerald-50/50 rounded-lg border border-slate-200 text-xs transition-colors"
+              className="p-3 bg-slate-50 hover:bg-emerald-50/50 rounded-xl border border-slate-200 text-xs transition-colors"
             >
               <div className="flex justify-between items-center mb-1">
                 <span className="font-bold text-slate-900 text-[11px]">{item.role}</span>
                 <button
                   onClick={() => setCV({ ...cv, profileSummary: item.text })}
-                  className="text-emerald-700 text-[10px] font-bold hover:underline"
+                  className="text-emerald-700 text-[10px] font-bold hover:underline cursor-pointer"
                 >
                   Utiliser ce texte
                 </button>
@@ -847,7 +1149,7 @@ function StepExperiences({
       startDate: '2023',
       endDate: '',
       current: true,
-      description: '• Description des missions et activités réalisées avec succès.'
+      description: '• Réalisation des missions clés et atteinte des objectifs fixés.'
     };
     setCV({ ...cv, experiences: [newExp, ...cv.experiences] });
   };
@@ -866,41 +1168,86 @@ function StepExperiences({
     });
   };
 
+  // Réorganisation : Monter / Descendre
+  const moveExp = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= cv.experiences.length) return;
+    const newExps = [...cv.experiences];
+    const [removed] = newExps.splice(index, 1);
+    newExps.splice(targetIndex, 0, removed);
+    setCV({ ...cv, experiences: newExps });
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-base font-extrabold text-slate-900">3. Expériences Professionnelles</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Ajoutez vos emplois, missions, stages et responsabilités antérieures.
+            Ajoutez, réorganisez ou supprimez vos emplois, missions et stages.
           </p>
         </div>
         <button
           onClick={addExperience}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 transition-colors shadow-2xs cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 text-white rounded-xl text-xs font-bold hover:bg-emerald-800 transition-colors shadow-2xs cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Ajouter</span>
         </button>
       </div>
 
+      {cv.experiences.length === 0 && (
+        <div className="p-6 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50 space-y-2">
+          <Briefcase className="w-8 h-8 text-slate-400 mx-auto" />
+          <p className="text-xs text-slate-600 font-semibold">Aucune expérience enregistrée.</p>
+          <button
+            onClick={addExperience}
+            className="text-xs font-bold text-emerald-700 hover:underline cursor-pointer"
+          >
+            + Ajouter votre première expérience
+          </button>
+        </div>
+      )}
+
       <div className="space-y-4">
         {cv.experiences.map((exp, idx) => (
           <div
             key={exp.id}
-            className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3 relative group"
+            className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3 relative group"
           >
             <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-emerald-800 font-mono">
+              <span className="text-xs font-extrabold text-emerald-800 font-mono">
                 Poste #{idx + 1}
               </span>
-              <button
-                onClick={() => removeExp(exp.id)}
-                className="text-slate-400 hover:text-red-600 transition-colors p-1"
-                title="Supprimer ce poste"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                {/* Boutons Monter / Descendre */}
+                <button
+                  type="button"
+                  disabled={idx === 0}
+                  onClick={() => moveExp(idx, 'up')}
+                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-20 cursor-pointer"
+                  title="Monter cette expérience"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  disabled={idx === cv.experiences.length - 1}
+                  onClick={() => moveExp(idx, 'down')}
+                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-20 cursor-pointer"
+                  title="Descendre cette expérience"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeExp(exp.id)}
+                  className="text-slate-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50 ml-1 cursor-pointer"
+                  title="Supprimer ce poste"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -910,7 +1257,7 @@ function StepExperiences({
                   type="text"
                   value={exp.role}
                   onChange={(e) => updateExp(exp.id, { role: e.target.value })}
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
                 />
               </div>
 
@@ -920,7 +1267,7 @@ function StepExperiences({
                   type="text"
                   value={exp.company}
                   onChange={(e) => updateExp(exp.id, { company: e.target.value })}
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
                 />
               </div>
             </div>
@@ -932,7 +1279,7 @@ function StepExperiences({
                   type="text"
                   value={exp.city}
                   onChange={(e) => updateExp(exp.id, { city: e.target.value })}
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
                 />
               </div>
 
@@ -943,7 +1290,7 @@ function StepExperiences({
                   value={exp.startDate}
                   onChange={(e) => updateExp(exp.id, { startDate: e.target.value })}
                   placeholder="Ex : 2021 ou Janv 2021"
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
                 />
               </div>
 
@@ -955,7 +1302,7 @@ function StepExperiences({
                   value={exp.current ? 'Présent' : exp.endDate}
                   onChange={(e) => updateExp(exp.id, { endDate: e.target.value })}
                   placeholder="Ex : 2023"
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white disabled:bg-slate-100"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white disabled:bg-slate-100"
                 />
               </div>
             </div>
@@ -968,7 +1315,7 @@ function StepExperiences({
                 onChange={(e) => updateExp(exp.id, { current: e.target.checked })}
                 className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
               />
-              <label htmlFor={`current_${exp.id}`} className="text-xs text-slate-700 font-medium">
+              <label htmlFor={`current_${exp.id}`} className="text-xs text-slate-700 font-medium cursor-pointer">
                 Poste actuel (en cours)
               </label>
             </div>
@@ -981,7 +1328,7 @@ function StepExperiences({
                 rows={3}
                 value={exp.description}
                 onChange={(e) => updateExp(exp.id, { description: e.target.value })}
-                className="w-full text-xs p-2 rounded border border-slate-300 bg-white leading-relaxed"
+                className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white leading-relaxed"
               />
             </div>
           </div>
@@ -1026,6 +1373,16 @@ function StepEducations({
     });
   };
 
+  // Réorganisation : Monter / Descendre
+  const moveEdu = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= cv.educations.length) return;
+    const newEdus = [...cv.educations];
+    const [removed] = newEdus.splice(index, 1);
+    newEdus.splice(targetIndex, 0, removed);
+    setCV({ ...cv, educations: newEdus });
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -1037,26 +1394,60 @@ function StepEducations({
         </div>
         <button
           onClick={addEdu}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 transition-colors shadow-2xs"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 text-white rounded-xl text-xs font-bold hover:bg-emerald-800 transition-colors shadow-2xs cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Ajouter</span>
         </button>
       </div>
 
+      {cv.educations.length === 0 && (
+        <div className="p-6 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50 space-y-2">
+          <GraduationCap className="w-8 h-8 text-slate-400 mx-auto" />
+          <p className="text-xs text-slate-600 font-semibold">Aucune formation enregistrée.</p>
+          <button
+            onClick={addEdu}
+            className="text-xs font-bold text-emerald-700 hover:underline cursor-pointer"
+          >
+            + Ajouter votre premier diplôme
+          </button>
+        </div>
+      )}
+
       <div className="space-y-4">
         {cv.educations.map((edu, idx) => (
-          <div key={edu.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+          <div key={edu.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
             <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-emerald-800 font-mono">
+              <span className="text-xs font-extrabold text-emerald-800 font-mono">
                 Formation #{idx + 1}
               </span>
-              <button
-                onClick={() => removeEdu(edu.id)}
-                className="text-slate-400 hover:text-red-600 transition-colors p-1"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={idx === 0}
+                  onClick={() => moveEdu(idx, 'up')}
+                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-20 cursor-pointer"
+                  title="Monter cette formation"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  disabled={idx === cv.educations.length - 1}
+                  onClick={() => moveEdu(idx, 'down')}
+                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-20 cursor-pointer"
+                  title="Descendre cette formation"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeEdu(edu.id)}
+                  className="text-slate-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50 ml-1 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div>
@@ -1066,7 +1457,7 @@ function StepEducations({
                 value={edu.degree}
                 onChange={(e) => updateEdu(edu.id, { degree: e.target.value })}
                 placeholder="Ex : Master en Gestion de Projet / Licence Informatique / BAC G2"
-                className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
               />
             </div>
 
@@ -1080,7 +1471,7 @@ function StepEducations({
                 value={edu.institution}
                 onChange={(e) => updateEdu(edu.id, { institution: e.target.value })}
                 placeholder="Ex : ENEAM - UAC, IFRI, ESM Bénin, Pigier..."
-                className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
               />
               <datalist id="benin_institutions">
                 {BENIN_INSTITUTIONS.map((inst, i) => (
@@ -1097,7 +1488,7 @@ function StepEducations({
                   value={edu.startDate}
                   onChange={(e) => updateEdu(edu.id, { startDate: e.target.value })}
                   placeholder="Ex : 2020"
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
                 />
               </div>
 
@@ -1108,7 +1499,7 @@ function StepEducations({
                   value={edu.endDate}
                   onChange={(e) => updateEdu(edu.id, { endDate: e.target.value })}
                   placeholder="Ex : 2023"
-                  className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                  className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
                 />
               </div>
             </div>
@@ -1122,7 +1513,7 @@ function StepEducations({
                 value={edu.description || ''}
                 onChange={(e) => updateEdu(edu.id, { description: e.target.value })}
                 placeholder="Ex : Mention Très Bien, Mémoire sur la fiscalité des PME au Bénin"
-                className="w-full text-xs p-2 rounded border border-slate-300 bg-white"
+                className="w-full text-xs p-2 rounded-xl border border-slate-300 bg-white"
               />
             </div>
           </div>
@@ -1165,29 +1556,27 @@ function StepSkills({
       <div>
         <h2 className="text-base font-extrabold text-slate-900">5. Compétences Professionnelles</h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Sélectionnez ou saisissez les compétences techniques, managériales et bureautiques que vous maîtrisez.
+          Sélectionnez ou saisissez les compétences techniques, bureautiques et transversales.
         </p>
       </div>
 
-      {/* Saisie rapide */}
       <div className="flex gap-2">
         <input
           type="text"
           value={newSkillName}
           onChange={(e) => setNewSkillName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && addSkill(newSkillName)}
-          placeholder="Ajouter une compétence (ex: Sage Saari, React, Négociation...)"
-          className="flex-1 text-xs p-2.5 rounded-lg border border-slate-300 outline-hidden focus:border-emerald-600"
+          placeholder="Ajouter une compétence (ex: Sage Saari, Excel, Gestion de projet...)"
+          className="flex-1 text-xs p-2.5 rounded-xl border border-slate-300 outline-hidden focus:border-emerald-600"
         />
         <button
           onClick={() => addSkill(newSkillName)}
-          className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 transition-colors"
+          className="px-4 py-2 bg-emerald-700 text-white rounded-xl text-xs font-bold hover:bg-emerald-800 transition-colors cursor-pointer"
         >
           Ajouter
         </button>
       </div>
 
-      {/* Vos compétences actuelles */}
       <div>
         <label className="block text-xs font-bold text-slate-800 mb-2">
           Vos compétences enregistrées ({cv.skills.length})
@@ -1201,7 +1590,7 @@ function StepSkills({
               <span>{s.name}</span>
               <button
                 onClick={() => removeSkill(s.id)}
-                className="text-emerald-700 hover:text-red-600 font-bold ml-1"
+                className="text-emerald-700 hover:text-red-600 font-bold ml-1 cursor-pointer"
               >
                 ×
               </button>
@@ -1210,14 +1599,13 @@ function StepSkills({
         </div>
       </div>
 
-      {/* Suggestions courantes au Bénin */}
       <div className="pt-3 border-t border-slate-200">
         <label className="block text-xs font-bold text-slate-700 mb-2">
           Suggestions recommandées au Bénin (cliquez pour ajouter) :
         </label>
         <div className="flex flex-wrap gap-1.5">
           {SUGGESTED_SKILLS.map((item, idx) => {
-            const alreadyAdded = cv.skills.some((s) => s.name === item.name);
+            const alreadyAdded = cv.skills.some((s) => s.name.toLowerCase() === item.name.toLowerCase());
             return (
               <button
                 key={idx}
@@ -1269,7 +1657,7 @@ function StepLanguages({
     });
   };
 
-  const defaultBeninLangs = ['Français', 'Fon', 'Yoruba', 'Anglais', 'Bariba', 'Dendi', 'Espagnol'];
+  const defaultBeninLangs = ['Français', 'Fon', 'Yoruba', 'Anglais', 'Bariba', 'Dendi', 'Mina', 'Espagnol'];
 
   return (
     <div className="space-y-4">
@@ -1284,14 +1672,14 @@ function StepLanguages({
         {cv.languages.map((lang) => (
           <div
             key={lang.id}
-            className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs"
+            className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs"
           >
             <span className="font-bold text-slate-900 text-xs">{lang.name}</span>
             <div className="flex items-center gap-3">
               <select
                 value={lang.level}
                 onChange={(e) => updateLevel(lang.id, e.target.value as Language['level'])}
-                className="text-xs p-1.5 rounded border border-slate-300 bg-white"
+                className="text-xs p-1.5 rounded-lg border border-slate-300 bg-white"
               >
                 <option value="notions">Notions de base</option>
                 <option value="intermediaire">Intermédiaire</option>
@@ -1301,7 +1689,7 @@ function StepLanguages({
               </select>
               <button
                 onClick={() => removeLanguage(lang.id)}
-                className="text-slate-400 hover:text-red-600"
+                className="text-slate-400 hover:text-red-600 p-1 cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -1312,14 +1700,14 @@ function StepLanguages({
 
       <div className="pt-2">
         <span className="text-[11px] font-bold text-slate-600 block mb-2">
-          Ajouter rapidement une langue :
+          Ajouter rapidement une langue courante au Bénin :
         </span>
         <div className="flex flex-wrap gap-2">
           {defaultBeninLangs.map((langName) => (
             <button
               key={langName}
               onClick={() => addLanguage(langName)}
-              className="text-xs px-3 py-1 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg font-medium text-slate-700"
+              className="text-xs px-3 py-1 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl font-medium text-slate-700 cursor-pointer"
             >
               + {langName}
             </button>
@@ -1384,13 +1772,13 @@ function StepCustomSections({
       <div>
         <h2 className="text-base font-extrabold text-slate-900">7. Sections Complémentaires</h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Activez ou désactivez les blocs facultatifs (Certifications, Projets, Centres d'intérêt).
+          Activez ou désactivez les blocs facultatifs (Certifications, Projets, Références, Centres d'intérêt).
         </p>
       </div>
 
       <div className="space-y-4">
         {cv.customSections.map((sec) => (
-          <div key={sec.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50">
+          <div key={sec.id} className="border border-slate-200 rounded-2xl p-4 bg-slate-50">
             <div className="flex items-center justify-between pb-2 border-b border-slate-200">
               <div className="flex items-center gap-2">
                 <input
@@ -1398,9 +1786,9 @@ function StepCustomSections({
                   id={`sec_${sec.id}`}
                   checked={sec.enabled}
                   onChange={() => toggleSection(sec.id)}
-                  className="rounded text-emerald-600"
+                  className="rounded text-emerald-600 cursor-pointer"
                 />
-                <label htmlFor={`sec_${sec.id}`} className="font-bold text-xs text-slate-900">
+                <label htmlFor={`sec_${sec.id}`} className="font-bold text-xs text-slate-900 cursor-pointer">
                   {sec.title}
                 </label>
               </div>
@@ -1408,7 +1796,7 @@ function StepCustomSections({
               {sec.enabled && (
                 <button
                   onClick={() => addItemToSection(sec.id)}
-                  className="text-xs text-emerald-700 font-bold hover:underline flex items-center gap-1"
+                  className="text-xs text-emerald-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Ajouter une ligne</span>
@@ -1421,7 +1809,7 @@ function StepCustomSections({
                 {sec.items.map((it) => (
                   <div
                     key={it.id}
-                    className="p-2.5 bg-white rounded-lg border border-slate-200 text-xs space-y-1.5"
+                    className="p-3 bg-white rounded-xl border border-slate-200 text-xs space-y-1.5"
                   >
                     <div className="flex justify-between items-center">
                       <input
@@ -1440,11 +1828,11 @@ function StepCustomSections({
                             })
                           });
                         }}
-                        className="font-semibold text-slate-900 w-3/4 p-1 border-b border-slate-200"
+                        className="font-semibold text-slate-900 w-3/4 p-1 border-b border-slate-200 outline-hidden"
                       />
                       <button
                         onClick={() => removeItem(sec.id, it.id)}
-                        className="text-slate-400 hover:text-red-600"
+                        className="text-slate-400 hover:text-red-600 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1468,7 +1856,7 @@ function StepCustomSections({
                         });
                       }}
                       placeholder="Description concise..."
-                      className="w-full text-slate-600 text-[11px] p-1 border border-slate-200 rounded"
+                      className="w-full text-slate-600 text-[11px] p-1 border border-slate-200 rounded-lg outline-hidden"
                     />
                   </div>
                 ))}
@@ -1483,10 +1871,12 @@ function StepCustomSections({
 
 function StepDesign({
   cv,
-  setCV
+  setCV,
+  onOpenGallery
 }: {
   cv: CVData;
   setCV: React.Dispatch<React.SetStateAction<CVData>>;
+  onOpenGallery: () => void;
 }) {
   const colors = [
     { name: 'Vert Émeraude', hex: '#047857' },
@@ -1508,90 +1898,75 @@ function StepDesign({
     'Poppins'
   ];
 
+  const currentTpl = CV_TEMPLATES.find((t) => t.id === cv.settings.templateId) || CV_TEMPLATES[0];
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-base font-extrabold text-slate-900">8. Personnalisation Visuelle</h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Modifiez le modèle, la nuance de couleur et la police typographique.
+          Modifiez le modèle de CV, l'accent de couleur, la typographie et les marges.
         </p>
       </div>
 
-      {/* Choix du modèle */}
+      {/* Modèle actif + Bouton d'ouverture de la galerie */}
+      <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-4">
+        <div>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+            Modèle actuellement sélectionné :
+          </span>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-sm font-black text-slate-900">{currentTpl.name}</span>
+            <span className="text-[10px] bg-slate-200 text-slate-700 font-bold px-2 py-0.2 rounded-full">
+              {currentTpl.styleLabel}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1">{currentTpl.description}</p>
+        </div>
+
+        <button
+          onClick={onOpenGallery}
+          className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 shrink-0 cursor-pointer"
+        >
+          <LayoutGrid className="w-3.5 h-3.5" />
+          <span>Explorer les 15 modèles</span>
+        </button>
+      </div>
+
+      {/* Palette de couleurs */}
       <div>
         <label className="block text-xs font-bold text-slate-800 mb-2">
-          Choisir parmi les 15 modèles :
+          Couleur d'accentuation principale :
         </label>
-        <div className="grid grid-cols-2 gap-2">
-          {CV_TEMPLATES.map((tpl) => {
-            const isSelected = cv.settings.templateId === tpl.id;
+        <div className="flex flex-wrap gap-2.5">
+          {colors.map((c) => {
+            const isSelected = cv.settings.primaryColor === c.hex;
             return (
               <button
-                key={tpl.id}
+                key={c.hex}
                 onClick={() =>
                   setCV({
                     ...cv,
-                    settings: {
-                      ...cv.settings,
-                      templateId: tpl.id,
-                      primaryColor: tpl.defaultColor
-                    }
+                    settings: { ...cv.settings, primaryColor: c.hex }
                   })
                 }
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  isSelected
-                    ? 'border-emerald-600 bg-emerald-50/70 ring-1 ring-emerald-600'
-                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                  isSelected ? 'scale-110 ring-2 ring-slate-900 shadow-md' : 'hover:scale-105'
                 }`}
+                style={{ backgroundColor: c.hex }}
+                title={c.name}
               >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-xs text-slate-900">{tpl.name}</span>
-                  {tpl.isPremium && (
-                    <span className="text-[9px] bg-amber-500 text-white font-extrabold px-1.5 py-0.2 rounded">
-                      PRO
-                    </span>
-                  )}
-                </div>
-                <p className="text-[10px] text-slate-500 mt-1 line-clamp-1">{tpl.description}</p>
+                {isSelected && <Check className="w-4 h-4 text-white stroke-[3]" />}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Palette de couleurs */}
+      {/* Police typographique */}
       <div>
         <label className="block text-xs font-bold text-slate-800 mb-2">
-          Couleur d'accentuation :
-        </label>
-        <div className="flex flex-wrap gap-2">
-          {colors.map((c) => (
-            <button
-              key={c.hex}
-              onClick={() =>
-                setCV({
-                  ...cv,
-                  settings: { ...cv.settings, primaryColor: c.hex }
-                })
-              }
-              className={`w-9 h-9 rounded-xl flex items-center justify-center transition-transform ${
-                cv.settings.primaryColor === c.hex ? 'scale-110 ring-2 ring-slate-900 shadow-md' : ''
-              }`}
-              style={{ backgroundColor: c.hex }}
-              title={c.name}
-            >
-              {cv.settings.primaryColor === c.hex && (
-                <CheckCircle className="w-4 h-4 text-white" />
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Police de caractères */}
-      <div>
-        <label className="block text-xs font-bold text-slate-800 mb-2">
-          Police typographique :
+          Police de caractères :
         </label>
         <div className="flex flex-wrap gap-2">
           {fonts.map((f) => (
@@ -1603,15 +1978,61 @@ function StepDesign({
                   settings: { ...cv.settings, fontFamily: f }
                 })
               }
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                 cv.settings.fontFamily === f
-                  ? 'border-emerald-600 bg-emerald-50 text-emerald-900'
-                  : 'border-slate-300 bg-white text-slate-700'
+                  ? 'border-emerald-600 bg-emerald-50 text-emerald-900 font-bold'
+                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
               }`}
             >
               {f}
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* Marges & Espacements A4 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200">
+        <div>
+          <label className="block text-xs font-bold text-slate-800 mb-1">
+            Marges du document :
+          </label>
+          <select
+            value={cv.settings.margins || 'normal'}
+            onChange={(e) =>
+              setCV({
+                ...cv,
+                settings: { ...cv.settings, margins: e.target.value as any }
+              })
+            }
+            className="w-full text-xs p-2.5 rounded-xl border border-slate-300 bg-white outline-hidden"
+          >
+            <option value="compact">Compactes (ajoute + de contenu)</option>
+            <option value="normal">Normales (recommandé A4 standard)</option>
+            <option value="large">Aérées (espacements amples)</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-slate-800 mb-1">
+            Affichage de la photo :
+          </label>
+          <div className="flex items-center gap-2 pt-2">
+            <input
+              type="checkbox"
+              id="toggle_photo"
+              checked={cv.settings.showPhoto !== false}
+              onChange={(e) =>
+                setCV({
+                  ...cv,
+                  settings: { ...cv.settings, showPhoto: e.target.checked }
+                })
+              }
+              className="rounded text-emerald-600 cursor-pointer"
+            />
+            <label htmlFor="toggle_photo" className="text-xs text-slate-700 font-medium cursor-pointer">
+              Afficher la photo si renseignée
+            </label>
+          </div>
         </div>
       </div>
     </div>
@@ -1657,7 +2078,7 @@ function StepValidation({
       <div>
         <h2 className="text-base font-extrabold text-slate-900">9. Contrôle Qualité du CV</h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Vérification automatique de la complétude et de la structure de votre document.
+          Vérification automatique de la complétude et de l'équilibre de votre document.
         </p>
       </div>
 
@@ -1667,7 +2088,7 @@ function StepValidation({
           <div>
             <h3 className="font-bold text-xs text-emerald-900">Document complet et équilibré !</h3>
             <p className="text-xs text-emerald-800 mt-1">
-              Toutes les rubriques essentielles sont renseignées avec soin. Votre CV est prêt à être exporté.
+              Toutes les rubriques essentielles sont renseignées avec soin. Votre CV est prêt pour le recrutement.
             </p>
           </div>
         </div>
@@ -1684,7 +2105,7 @@ function StepValidation({
                   <span>• {item.label}</span>
                   <button
                     onClick={() => onGoToStep(item.step)}
-                    className="font-bold text-emerald-800 hover:underline text-[11px]"
+                    className="font-bold text-emerald-800 hover:underline text-[11px] cursor-pointer"
                   >
                     Corriger
                   </button>
@@ -1732,6 +2153,7 @@ function StepDownload({
   onDownload,
   onPrint,
   onOpenPricing,
+  onShare,
   isExporting
 }: {
   cv: CVData;
@@ -1739,6 +2161,7 @@ function StepDownload({
   onDownload: () => void;
   onPrint: () => void;
   onOpenPricing: () => void;
+  onShare: () => void;
   isExporting: boolean;
 }) {
   return (
@@ -1773,23 +2196,23 @@ function StepDownload({
             <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl max-w-md mx-auto text-left">
               <div className="font-bold text-amber-900 text-xs">Offre Découverte : filigrane discret inclus</div>
               <p className="text-[11px] text-amber-800 mt-0.5 leading-snug">
-                Pour seulement 500 FCFA (accès 7 jours), retirez immédiatement le filigrane et débloquez tous les 15 modèles.
+                Pour seulement 500 FCFA (accès 24h) ou 1 000 FCFA (accès 30 jours), retirez immédiatement le filigrane et débloquez tous les 15 modèles.
               </p>
               <button
                 onClick={onOpenPricing}
-                className="mt-2 text-xs font-bold text-amber-900 bg-amber-200 hover:bg-amber-300 px-3 py-1 rounded-lg transition-colors"
+                className="mt-2 text-xs font-bold text-amber-900 bg-amber-200 hover:bg-amber-300 px-3 py-1 rounded-lg transition-colors cursor-pointer"
               >
-                Passer au Premium via Mobile Money (500 F)
+                Passer au Premium via Moov Money (dès 500 F)
               </button>
             </div>
           )}
         </div>
 
-        <div className="pt-2 flex flex-col sm:flex-row justify-center gap-3">
+        <div className="pt-2 flex flex-wrap justify-center gap-3">
           <button
             onClick={onDownload}
             disabled={isExporting}
-            className="px-6 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+            className="px-6 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
           >
             <Download className="w-4 h-4" />
             <span>{isExporting ? 'Génération du PDF...' : 'Télécharger le PDF A4'}</span>
@@ -1797,10 +2220,18 @@ function StepDownload({
 
           <button
             onClick={onPrint}
-            className="px-5 py-3 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-semibold text-xs border border-slate-300 transition-colors flex items-center justify-center gap-2"
+            className="px-5 py-3 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-semibold text-xs border border-slate-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
           >
             <Printer className="w-4 h-4 text-slate-600" />
             <span>Imprimer le document</span>
+          </button>
+
+          <button
+            onClick={onShare}
+            className="px-5 py-3 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-semibold text-xs border border-slate-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <Share2 className="w-4 h-4 text-slate-600" />
+            <span>Partager le lien</span>
           </button>
         </div>
       </div>

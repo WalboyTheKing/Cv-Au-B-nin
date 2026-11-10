@@ -112,11 +112,14 @@ export interface CVData {
 
 export type TemplateCategory =
   | 'tous'
-  | 'debutant'
-  | 'technique'
-  | 'tertiaire'
+  | 'classique'
   | 'moderne'
-  | 'classique';
+  | 'professionnel'
+  | 'minimaliste'
+  | 'elegant'
+  | 'creatif'
+  | 'academique'
+  | 'ats';
 
 export interface TemplateDefinition {
   id: string;
@@ -124,6 +127,8 @@ export interface TemplateDefinition {
   slug: string;
   description: string;
   category: TemplateCategory;
+  styleLabel: string;
+  characteristics: string[];
   isPremium: boolean;
   isActive: boolean;
   defaultColor: string;

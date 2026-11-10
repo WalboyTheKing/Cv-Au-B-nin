@@ -93,6 +93,15 @@ export const Footer: React.FC<FooterProps> = ({ onOpenLegal, onNavigate, onOpenA
                   Guide & Conseils Emploi Bénin
                 </button>
               </li>
+              <li className="pt-1 border-t border-slate-800/80">
+                <button
+                  onClick={() => onNavigate('admin')}
+                  className="hover:text-amber-400 text-slate-400 transition-colors flex items-center gap-1.5"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>Console d'Administration</span>
+                </button>
+              </li>
             </ul>
           </div>
 
@@ -174,12 +183,21 @@ export const Footer: React.FC<FooterProps> = ({ onOpenLegal, onNavigate, onOpenA
         <div className="pt-8 flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500">
           <div className="flex items-center gap-2">
             <p>© {new Date().getFullYear()} {APP_CONFIG.brandName}. Tous droits réservés.</p>
+            <button
+              onClick={() => onNavigate('admin')}
+              title="Console d'Administration"
+              className="text-slate-500 hover:text-amber-400 p-1 transition-colors cursor-pointer flex items-center gap-1 text-[11px]"
+              aria-label="Accès Administration"
+            >
+              <Lock className="w-3 h-3 text-amber-500/80" />
+              <span>Admin</span>
+            </button>
             {onOpenAuth && (
               <button
                 onClick={onOpenAuth}
                 title="Espace sécurisé"
                 className="text-slate-600 hover:text-slate-400 p-1 transition-colors cursor-pointer"
-                aria-label="Accès sécurisé"
+                aria-label="Connexion candidat"
               >
                 <Lock className="w-3 h-3" />
               </button>

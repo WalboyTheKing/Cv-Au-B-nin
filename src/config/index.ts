@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Plan, TemplateDefinition } from '../types';
+import { Plan, TemplateDefinition, TemplateCategory } from '../types';
 
 export const MOOV_MONEY_BENEFICIARY = {
   beneficiaryName: 'Waaliyou Z Labouda',
@@ -130,6 +130,18 @@ export const INITIAL_PLANS: Plan[] = [
   }
 ];
 
+export const TEMPLATE_CATEGORIES: { id: TemplateCategory; label: string; count: number }[] = [
+  { id: 'tous', label: 'Tous les modèles', count: 15 },
+  { id: 'classique', label: 'Classique', count: 2 },
+  { id: 'moderne', label: 'Moderne', count: 2 },
+  { id: 'professionnel', label: 'Professionnel', count: 3 },
+  { id: 'minimaliste', label: 'Minimaliste', count: 1 },
+  { id: 'elegant', label: 'Élégant', count: 2 },
+  { id: 'creatif', label: 'Créatif', count: 1 },
+  { id: 'academique', label: 'Académique', count: 3 },
+  { id: 'ats', label: 'ATS / Recrutement', count: 1 }
+];
+
 export const CV_TEMPLATES: TemplateDefinition[] = [
   {
     id: 'classique',
@@ -137,6 +149,8 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     slug: 'classique',
     description: 'Mise en page sobre et conventionnelle, idéale pour les concours administratifs, banques et ministères.',
     category: 'classique',
+    styleLabel: 'Classique',
+    characteristics: ['1 colonne sobre', 'Idéal concours', 'Banques & Ministères', 'Lisibilité maximale'],
     isPremium: false,
     isActive: true,
     defaultColor: '#1e3a8a', // Bleu marine
@@ -149,6 +163,8 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     slug: 'moderne',
     description: 'Bandeau latéral coloré élégant avec mise en relief des coordonnées, compétences et langues.',
     category: 'moderne',
+    styleLabel: 'Moderne',
+    characteristics: ['Bandeau latéral gauche', 'Avec photo', '2 colonnes équilibrées', 'Polyvalent'],
     isPremium: false,
     isActive: true,
     defaultColor: '#047857', // Vert émeraude
@@ -160,7 +176,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Minimaliste Épuré',
     slug: 'minimaliste',
     description: 'Design aéré focalisé sur la lisibilité des textes et l’impact direct des compétences.',
-    category: 'moderne',
+    category: 'minimaliste',
+    styleLabel: 'Minimaliste',
+    characteristics: ['Typographie épurée', 'Aéré & direct', 'Lignes de séparation fines', 'Consulting & ONG'],
     isPremium: false,
     isActive: true,
     defaultColor: '#334155', // Ardoise
@@ -172,7 +190,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Premier Emploi Tremplin',
     slug: 'premier-emploi',
     description: 'Spécialement agencé pour mettre en valeur les compétences et projets des jeunes diplômés.',
-    category: 'debutant',
+    category: 'moderne',
+    styleLabel: 'Moderne',
+    characteristics: ['Compétences en tête', 'Mise en valeur projets', 'Idéal débutants', 'Structure dynamique'],
     isPremium: false,
     isActive: true,
     defaultColor: '#0284c7', // Bleu ciel
@@ -181,10 +201,12 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
   },
   {
     id: 'etudiant',
-    name: 'Étudiant & Stage',
+    name: 'Étudiant & Stage Académique',
     slug: 'etudiant',
     description: 'Priorise le parcours académique, les mentions, stages et engagements associatifs.',
-    category: 'debutant',
+    category: 'academique',
+    styleLabel: 'Académique',
+    characteristics: ['Diplômes en premier', 'Mentions valorisées', 'Stages universitaires', 'Idéal UAC & UP'],
     isPremium: false,
     isActive: true,
     defaultColor: '#4f46e5', // Indigo
@@ -196,7 +218,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Technicien & Opérations',
     slug: 'technicien',
     description: 'Structure technique rigoureuse mettant en lumière les habilitations, outillages et maintenance.',
-    category: 'technique',
+    category: 'professionnel',
+    styleLabel: 'Professionnel',
+    characteristics: ['Colonne droite outillages', 'Habilitations sécurité', 'BTP & Télécoms', 'Rigueur terrain'],
     isPremium: true,
     isActive: true,
     defaultColor: '#ea580c', // Orange industriel
@@ -208,7 +232,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Tech & Développeur Web',
     slug: 'informatique',
     description: 'Style épuré haute lisibilité avec section GitHub/Portfolio et tags de langages et frameworks.',
-    category: 'technique',
+    category: 'creatif',
+    styleLabel: 'Créatif',
+    characteristics: ['Header dark tech', 'Tags stack technique', 'GitHub & Portfolio', 'Dev & Data'],
     isPremium: true,
     isActive: true,
     defaultColor: '#0f172a', // Noir tech
@@ -220,7 +246,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Commercial & Vente',
     slug: 'commercial',
     description: 'Design percutant axé sur les résultats chiffrés, le sens du relationnel et la négociation.',
-    category: 'tertiaire',
+    category: 'elegant',
+    styleLabel: 'Élégant',
+    characteristics: ['Résultats chiffrés / KPIs', 'Bannière haute percutante', 'Prospection terrain', 'Énergique'],
     isPremium: true,
     isActive: true,
     defaultColor: '#b91c1c', // Rouge vif énergique
@@ -232,7 +260,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Comptabilité & Finance',
     slug: 'comptabilite',
     description: 'Rigueur visuelle absolue, équilibre des colonnes et clarté des déclarations fiscales et d’audit.',
-    category: 'tertiaire',
+    category: 'professionnel',
+    styleLabel: 'Professionnel',
+    characteristics: ['Conforme SYSCOHADA', 'Encadrement rigoureux', 'Fiscalité DGI & CNSS', 'Double colonne nette'],
     isPremium: true,
     isActive: true,
     defaultColor: '#0f766e', // Sarcelle
@@ -244,7 +274,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Enseignant & Pédagogue',
     slug: 'enseignant',
     description: 'Présentation académique noble adaptée aux lycées, collèges, universités et centres de formation.',
-    category: 'classique',
+    category: 'academique',
+    styleLabel: 'Académique',
+    characteristics: ['Style universitaire noble', 'Publications & Formations', '1 colonne lisible', 'Professeurs & Formateurs'],
     isPremium: true,
     isActive: true,
     defaultColor: '#4338ca', // Indigo profond
@@ -256,7 +288,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Executive & Management',
     slug: 'management',
     description: 'Format haut de gamme reflétant le leadership, la gestion d’équipes et la stratégie d’entreprise.',
-    category: 'tertiaire',
+    category: 'elegant',
+    styleLabel: 'Élégant',
+    characteristics: ['Prestige & Leadership', 'Projets stratégiques', 'Gestion d\'équipes', 'Cadres dirigeants'],
     isPremium: true,
     isActive: true,
     defaultColor: '#1e293b', // Anthracite
@@ -268,7 +302,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'International ATS (Sans Photo)',
     slug: 'sans-photo',
     description: 'Conforme aux standards internationaux et aux filtres ATS, maximisant vos chances pour les ONG et multinationales.',
-    category: 'moderne',
+    category: 'ats',
+    styleLabel: 'ATS / Recrutement',
+    characteristics: ['100% optimisé ATS', 'Sans photo', 'Standards ONG & ONU', 'Format international'],
     isPremium: true,
     isActive: true,
     defaultColor: '#27272a', // Neutre zinc
@@ -280,7 +316,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Stage Pro Perfectionnement',
     slug: 'stage',
     description: 'Idéal pour candidater à un stage d’insertion ou de fin de cycle au Bénin.',
-    category: 'debutant',
+    category: 'academique',
+    styleLabel: 'Académique',
+    characteristics: ['Stage d\'insertion', 'Disponibilité immédiate', 'Formations pratiques', 'Fin de cycle'],
     isPremium: true,
     isActive: true,
     defaultColor: '#059669', // Vert menthe
@@ -292,7 +330,9 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     name: 'Secrétariat & Administration',
     slug: 'administratif',
     description: 'Structure organisée valorisant l’accueil, la rédaction administrative et l’organisation bureautique.',
-    category: 'tertiaire',
+    category: 'professionnel',
+    styleLabel: 'Professionnel',
+    characteristics: ['Organisation bureautique', 'Accueil & Rédaction', 'Barre latérale claire', 'Secrétariat de direction'],
     isPremium: true,
     isActive: true,
     defaultColor: '#7c3aed', // Violet moderne
@@ -305,6 +345,8 @@ export const CV_TEMPLATES: TemplateDefinition[] = [
     slug: 'professionnel',
     description: 'Chronologie inverse détaillée avec mise en exergue des responsabilités majeures.',
     category: 'classique',
+    styleLabel: 'Classique',
+    characteristics: ['Chronologie inverse stricte', 'Missions d\'envergure', 'Cadres confirmés', 'Sobriété élégante'],
     isPremium: true,
     isActive: true,
     defaultColor: '#374151', // Gris acier

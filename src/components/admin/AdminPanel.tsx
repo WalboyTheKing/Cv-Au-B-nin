@@ -66,6 +66,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [activeTab, setActiveTab] = useState<'metrics' | 'users' | 'orders' | 'plans' | 'cvs' | 'logs'>('metrics');
 
   // Formulaire d'authentification administrateur si non connecté
+  const [forceShowLoginForm, setForceShowLoginForm] = useState<boolean>(false);
   const [adminEmailInput, setAdminEmailInput] = useState<string>('admin@cvprobenin.bj');
   const [adminPasswordInput, setAdminPasswordInput] = useState<string>('');
   const [adminLoginError, setAdminLoginError] = useState<string>('');
@@ -176,8 +177,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // 1. Si aucun utilisateur n'est connecté : Affichage de la page de connexion dédiée Admin
-  if (!currentUser) {
+  // 1. Si aucun utilisateur n'est connecté ou si forçage de connexion admin : Affichage de la page de connexion dédiée Admin
+  if (!currentUser || forceShowLoginForm) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 selection:bg-amber-500/30 selection:text-amber-200">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
@@ -246,7 +247,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             <button
               type="button"
-              onClick={onBack}
+              onClick={() => {
+                setForceShowLoginForm(false);
+                onBack();
+              }}
               className="w-full py-2.5 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer text-center block"
             >
               ← Retourner sur le site public
@@ -257,7 +261,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
-  // 2. Si un utilisateur est connecté mais n'a PAS le rôle admin : Refus d'accès strict (403)
+  // 2. Si un utilisateur est connecté mais n'a PAS le rôle admin : Refus d'accès strict (403) avec option de connexion admin
   if (!isAdmin) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 text-center">
@@ -272,6 +276,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </p>
           </div>
           <div className="pt-2 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setForceShowLoginForm(true)}
+              className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Lock className="w-4 h-4" />
+              <span>Se connecter avec un compte Administrateur</span>
+            </button>
             <button
               onClick={onBack}
               className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors cursor-pointer"

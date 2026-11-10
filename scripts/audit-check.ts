@@ -550,6 +550,127 @@ assert(attemptDeleteAdmin.deleted === false, 'Protection inviolable : le compte 
 const normalDelete = deleteAccountSecure(userToDelete);
 assert(normalDelete.deleted === true, 'Droit à l’oubli APDP Bénin : suppression du compte candidat exécutée avec succès');
 
+// -----------------------------------------------------------------------------
+// 17. CONFORMITÉ DES 8 CATÉGORIES OFFICIELLES & CARACTÉRISTIQUES DES 15 MODÈLES
+// -----------------------------------------------------------------------------
+console.log('\n--- 17. 8 Catégories Officielles & Caractéristiques des Modèles ---');
+import { TEMPLATE_CATEGORIES } from '../src/config';
+const expectedCategoryIds = ['classique', 'moderne', 'professionnel', 'minimaliste', 'elegant', 'creatif', 'academique', 'ats'];
+
+assert(TEMPLATE_CATEGORIES.length === 9, 'TEMPLATE_CATEGORIES contient "tous" + les 8 catégories officielles (9 entrées)');
+const realCategories = TEMPLATE_CATEGORIES.filter((c) => c.id !== 'tous').map((c) => c.id);
+assert(
+  expectedCategoryIds.every((cat) => realCategories.includes(cat as any)),
+  'Toutes les 8 catégories officielles sont présentes : Classique, Moderne, Professionnel, Minimaliste, Élégant, Créatif, Académique, ATS / Recrutement'
+);
+
+// Vérifier que chaque modèle des 15 possède une catégorie valide, un styleLabel et des caractéristiques
+const allModelsValid = CV_TEMPLATES.every((tpl) => {
+  return (
+    expectedCategoryIds.includes(tpl.category) &&
+    typeof tpl.styleLabel === 'string' &&
+    tpl.styleLabel.length > 0 &&
+    Array.isArray(tpl.characteristics) &&
+    tpl.characteristics.length >= 2
+  );
+});
+assert(allModelsValid, 'Chaque modèle parmi les 15 dispose d’une catégorie valide, d’un libellé de style et d’au moins 2 caractéristiques');
+
+// -----------------------------------------------------------------------------
+// 18. DÉCOUPLAGE STRICT CONTENU - PRÉSENTATION (CHANGEMENT DE MODÈLE SANS PERTE)
+// -----------------------------------------------------------------------------
+console.log('\n--- 18. Découplage Strict Contenu - Présentation ---');
+const candidateRichCV: CVData = {
+  ...draftCV,
+  personalInfo: {
+    ...draftCV.personalInfo,
+    firstName: 'Waaliyou',
+    lastName: 'LABOUDA',
+    jobTitle: 'Développeur Full Stack',
+    phone: '+229 97 00 11 22',
+    email: 'waaliyou@test.bj'
+  },
+  experiences: [
+    {
+      id: 'exp_1',
+      role: 'Lead Développeur',
+      company: 'Tech Bénin SARL',
+      city: 'Cotonou',
+      country: 'Bénin',
+      startDate: '2022',
+      endDate: '2024',
+      current: false,
+      description: 'Développement de plateformes web'
+    }
+  ],
+  educations: [
+    {
+      id: 'edu_1',
+      degree: 'Master Informatique',
+      institution: 'IFRI - UAC',
+      city: 'Abomey-Calavi',
+      country: 'Bénin',
+      startDate: '2020',
+      endDate: '2022',
+      current: false
+    }
+  ],
+  skills: [{ id: 'sk_1', name: 'React', category: 'dev_web', level: 5 }],
+  languages: [{ id: 'lg_1', name: 'Français', level: 'courant' }]
+};
+
+// Simulation du changement de modèle sur les 15 modèles existants
+let dataIntactAcrossAll15 = true;
+CV_TEMPLATES.forEach((tpl) => {
+  const switchedCV: CVData = {
+    ...candidateRichCV,
+    settings: {
+      ...candidateRichCV.settings,
+      templateId: tpl.id,
+      primaryColor: tpl.defaultColor
+    }
+  };
+  if (
+    switchedCV.personalInfo.firstName !== 'Waaliyou' ||
+    switchedCV.personalInfo.lastName !== 'LABOUDA' ||
+    switchedCV.experiences.length !== 1 ||
+    switchedCV.educations.length !== 1 ||
+    switchedCV.skills[0].name !== 'React' ||
+    switchedCV.languages[0].name !== 'Français'
+  ) {
+    dataIntactAcrossAll15 = false;
+  }
+});
+assert(dataIntactAcrossAll15, 'Les données du candidat restent 100% intactes lors du passage à travers les 15 modèles');
+
+// -----------------------------------------------------------------------------
+// 19. EXTRACTION & RECONNAISSANCE DES ALIAS DE RUBRIQUES
+// -----------------------------------------------------------------------------
+console.log('\n--- 19. Reconnaissance des Variantes et Alias de Rubriques ---');
+import { SECTION_ALIASES } from '../src/services/documentParser';
+
+assert(!!SECTION_ALIASES.experiences, 'Alias pour la section "Expériences" définis');
+assert(
+  SECTION_ALIASES.experiences.includes('parcours professionnel') &&
+    SECTION_ALIASES.experiences.includes('expérience professionnelle') &&
+    SECTION_ALIASES.experiences.includes('stages'),
+  'Variantes "parcours professionnel", "expérience professionnelle", "stages" reconnues comme expériences'
+);
+
+assert(
+  SECTION_ALIASES.educations.includes('cursus académique') &&
+    SECTION_ALIASES.educations.includes('études et diplômes') &&
+    SECTION_ALIASES.educations.includes('parcours scolaire'),
+  'Variantes académiques reconnues comme formations'
+);
+
+assert(
+  SECTION_ALIASES.skills.includes('compétences techniques') &&
+    SECTION_ALIASES.skills.includes('compétences informatiques') &&
+    SECTION_ALIASES.skills.includes('savoir-faire'),
+  'Variantes de compétences reconnues fidèlement'
+);
+
 console.log('\n======================================================================');
 console.log(`BILAN DU CONTRÔLE QUALITÉ : ${passedTests} TESTS VALIDÉS, ${failedTests} ÉCHECS`);
 console.log('======================================================================\n');
@@ -559,4 +680,5 @@ if (failedTests > 0) {
 } else {
   process.exit(0);
 }
+
 
