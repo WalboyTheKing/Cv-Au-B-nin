@@ -283,6 +283,241 @@ class StorageService {
     }
   }
 
+  suspendUser(userId: string, adminId: string, adminEmail: string, reason: string): boolean {
+    const list = this.getUsers();
+    const user = list.find((u) => u.id === userId);
+    if (!user) return false;
+    user.isSuspended = true;
+    user.suspendedReason = reason.trim() || 'Activité suspecte ou non conforme';
+    user.suspendedAt = new Date().toISOString();
+    user.updatedAt = new Date().toISOString();
+    this.saveUser(user);
+
+    this.addAuditLog({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: `Suspension du compte ${user.email} (${user.firstName} ${user.lastName}). Motif : ${user.suspendedReason}`,
+      resourceType: 'user',
+      resourceId: user.id
+    });
+    return true;
+  }
+
+  reactivateUser(userId: string, adminId: string, adminEmail: string): boolean {
+    const list = this.getUsers();
+    const user = list.find((u) => u.id === userId);
+    if (!user) return false;
+    user.isSuspended = false;
+    delete user.suspendedReason;
+    delete user.suspendedAt;
+    user.updatedAt = new Date().toISOString();
+    this.saveUser(user);
+
+    this.addAuditLog({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: `Réactivation du compte ${user.email} (${user.firstName} ${user.lastName})`,
+      resourceType: 'user',
+      resourceId: user.id
+    });
+    return true;
+  }
+
+  updateUserProfileAdmin(
+    userId: string,
+    data: Partial<UserProfile>,
+    adminId: string,
+    adminEmail: string
+  ): boolean {
+    const list = this.getUsers();
+    const user = list.find((u) => u.id === userId);
+    if (!user) return false;
+
+    if (data.firstName) user.firstName = data.firstName.trim();
+    if (data.lastName) user.lastName = data.lastName.trim();
+    if (data.phoneNumber) user.phoneNumber = data.phoneNumber.trim();
+    if (data.role && (data.role === 'user' || data.role === 'admin')) user.role = data.role;
+    user.updatedAt = new Date().toISOString();
+
+    this.saveUser(user);
+    this.addAuditLog({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: `Mise à jour administrative des informations de ${user.email}`,
+      resourceType: 'user',
+      resourceId: user.id
+    });
+    return true;
+  }
+
+  deleteUserAdmin(userId: string, adminId: string, adminEmail: string): boolean {
+    let list = this.getUsers();
+    const user = list.find((u) => u.id === userId);
+    if (!user) return false;
+    if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
+      return false; // Protection du compte admin principal
+    }
+
+    list = list.filter((u) => u.id !== userId);
+    this.setItem('users_list', list);
+
+    this.addAuditLog({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: `Suppression définitive du compte utilisateur ${user.email} (${user.firstName} ${user.lastName})`,
+      resourceType: 'user',
+      resourceId: userId
+    });
+    return true;
+  }
+
+  async updateMyProfile(data: {
+    firstName?: string;
+    lastName?: string;
+    phoneNumber?: string;
+  }): Promise<{ success: boolean; user?: UserProfile; error?: string }> {
+    const current = this.getCurrentUser();
+    if (!current) return { success: false, error: 'Non authentifié.' };
+
+    const token = localStorage.getItem('cv_pro_auth_token');
+    if (token) {
+      try {
+        const res = await fetch('/api/auth/profile', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify(data)
+        });
+        const resData = await res.json();
+        if (resData.success && resData.user) {
+          this.setCurrentUser(resData.user);
+          this.saveUser(resData.user);
+          return { success: true, user: resData.user };
+        }
+      } catch (e) {
+        console.warn('API profile update fallback local', e);
+      }
+    }
+
+    // Local fallback
+    if (data.firstName) current.firstName = data.firstName.trim();
+    if (data.lastName) current.lastName = data.lastName.trim();
+    if (data.phoneNumber !== undefined) current.phoneNumber = data.phoneNumber.trim();
+    current.updatedAt = new Date().toISOString();
+    this.saveUser(current);
+    this.setCurrentUser(current);
+    return { success: true, user: current };
+  }
+
+  async changeMyPassword(
+    currentPassword: string,
+    newPassword: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    const token = localStorage.getItem('cv_pro_auth_token');
+    if (token) {
+      try {
+        const res = await fetch('/api/auth/change-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ currentPassword, newPassword })
+        });
+        const resData = await res.json();
+        if (!res.ok || !resData.success) {
+          return { success: false, error: resData.error || 'Erreur lors du changement de mot de passe.' };
+        }
+        return { success: true, message: resData.message || 'Mot de passe modifié.' };
+      } catch (e) {
+        return { success: false, error: 'Impossible de contacter le serveur de sécurité.' };
+      }
+    }
+    return { success: true, message: 'Mot de passe mis à jour.' };
+  }
+
+  async deleteMyAccount(): Promise<{ success: boolean; error?: string }> {
+    const current = this.getCurrentUser();
+    if (!current) return { success: false, error: 'Non connecté.' };
+
+    const token = localStorage.getItem('cv_pro_auth_token');
+    if (token) {
+      try {
+        const res = await fetch('/api/auth/delete-account', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          }
+        });
+        const resData = await res.json();
+        if (!res.ok || !resData.success) {
+          return { success: false, error: resData.error || 'Erreur lors de la suppression.' };
+        }
+      } catch (e) {
+        console.warn('Fallback suppression locale', e);
+      }
+    }
+
+    // Effacement local
+    const cvs = this.getCVs().filter((c) => c.userId !== current.id);
+    this.setItem('cvs', cvs);
+    let users = this.getUsers().filter((u) => u.id !== current.id);
+    this.setItem('users_list', users);
+    this.setCurrentUser(null);
+    localStorage.removeItem('cv_pro_auth_token');
+    return { success: true };
+  }
+
+  grantManualAccess(
+    userId: string,
+    planCode: 'cand_24h' | 'career_30d',
+    reason: string,
+    adminId: string,
+    adminEmail: string,
+    cvId?: string
+  ): boolean {
+    const plan = this.getPlanByCode(planCode);
+    if (!plan) return false;
+
+    const durationMs = planCode === 'career_30d' ? 30 * 86400000 : 86400000;
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + durationMs).toISOString();
+
+    // 1. Mise à jour de l'abonnement utilisateur
+    this.activateSubscription(userId, plan);
+
+    // 2. Si un CV est ciblé, lui attribuer l'accès sans filigrane
+    if (cvId) {
+      const cv = this.getCVById(cvId);
+      if (cv) {
+        cv.access = {
+          planCode,
+          planName: plan.name,
+          status: 'active',
+          approvedAt: nowIso,
+          expiresAt,
+          orderId: 'admin_grant_' + Date.now(),
+          orderNumber: 'ACCÈS-EXCEPTIONNEL'
+        };
+        cv.updatedAt = nowIso;
+        this.saveCV(cv);
+      }
+    }
+
+    this.addAuditLog({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: `Attribution manuelle exceptionnelle du forfait ${plan.name} (${planCode}). Motif : ${reason}`,
+      resourceType: 'plan',
+      resourceId: cvId || userId
+    });
+    return true;
+  }
+
   // --- CVs ---
   private cleanCorruptedCV(c: CVData): CVData {
     if (!c) return c;
@@ -390,6 +625,10 @@ class StorageService {
 
   getPlanById(id: string): Plan | undefined {
     return this.getPlans().find((p) => p.id === id);
+  }
+
+  getPlanByCode(code: string): Plan | undefined {
+    return this.getPlans().find((p) => p.code === code);
   }
 
   // --- Templates ---
@@ -515,6 +754,20 @@ class StorageService {
     cvTitle?: string;
   }): ManualPaymentOrder {
     const { userId, userEmail, userName, plan, cvId, cvTitle } = params;
+    const all = this.getManualOrders();
+
+    // Réutilisation de la commande en cours si déjà initiée pour ce CV et forfait (évite l'incrémentation sans fin)
+    const existing = all.find(
+      (o) =>
+        (o.userId === userId || o.userEmail === userEmail) &&
+        o.planId === plan.id &&
+        (cvId ? o.cvId === cvId : true) &&
+        o.status === 'pending_payment'
+    );
+    if (existing) {
+      return existing;
+    }
+
     const now = new Date().toISOString();
     const orderNumber = `CMD-MOOV-${Date.now().toString().slice(-6)}`;
     const newOrder: ManualPaymentOrder = {
@@ -538,7 +791,6 @@ class StorageService {
       updatedAt: now
     };
 
-    const all = this.getManualOrders();
     all.unshift(newOrder);
     this.setItem('manual_orders', all);
 
@@ -759,25 +1011,87 @@ class StorageService {
   getAdminMetrics(): AdminMetrics {
     const users = this.getUsers();
     const cvs = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
-    const payments = this.getPayments();
-    const confirmed = payments.filter((p) => p.status === 'confirmed');
-    const totalRev = confirmed.reduce((acc, curr) => acc + curr.amountXOF, 0);
     const manualOrders = this.getManualOrders();
-    const pendingOrders = manualOrders.filter((o) => o.status === 'pending_verification');
+    const payments = this.getPayments();
 
-    const activeSubs = users.filter((u) => {
-      if (!u.subscription || u.subscription.status !== 'active') return false;
-      const exp = new Date(u.subscription.expiresAt).getTime();
-      return exp > Date.now();
-    }).length;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const sevenDaysAgo = Date.now() - 7 * 86400000;
+    const thirtyDaysAgo = Date.now() - 30 * 86400000;
+
+    const newUsersToday = users.filter((u) => new Date(u.createdAt).getTime() >= todayStart).length;
+    const newUsers7Days = users.filter((u) => new Date(u.createdAt).getTime() >= sevenDaysAgo).length;
+    const newUsers30Days = users.filter((u) => new Date(u.createdAt).getTime() >= thirtyDaysAgo).length;
+    const suspendedUsersCount = users.filter((u) => u.isSuspended === true).length;
+    const activeUsersCount = users.length - suspendedUsersCount;
+
+    const approvedOrders = manualOrders.filter((o) => o.status === 'approved');
+    const pendingOrders = manualOrders.filter(
+      (o) => o.status === 'pending_verification' || o.status === 'pending_payment'
+    );
+    const rejectedOrders = manualOrders.filter((o) => o.status === 'rejected');
+
+    const totalRevenueXOF = approvedOrders.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
+
+    const candOrders = approvedOrders.filter(
+      (o) => o.planCode === 'cand_24h' || o.planCode === 'premium_7d'
+    );
+    const careerOrders = approvedOrders.filter(
+      (o) => o.planCode === 'career_30d' || o.planCode === 'plus_30d'
+    );
+
+    const salesByPlan = {
+      cand_24h: {
+        count: candOrders.length,
+        revenue: candOrders.reduce((sum, o) => sum + (o.amountXOF || 500), 0)
+      },
+      career_30d: {
+        count: careerOrders.length,
+        revenue: careerOrders.reduce((sum, o) => sum + (o.amountXOF || 1000), 0)
+      }
+    };
+
+    // Évolution quotidienne sur les 7 derniers jours (réelle)
+    const dailyEvolution: { date: string; users: number; orders: number; revenue: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const dayEnd = dayStart + 86400000;
+      const dateLabel = d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+
+      const dayUsers = users.filter((u) => {
+        const t = new Date(u.createdAt).getTime();
+        return t >= dayStart && t < dayEnd;
+      }).length;
+
+      const dayOrders = approvedOrders.filter((o) => {
+        const t = new Date(o.createdAt).getTime();
+        return t >= dayStart && t < dayEnd;
+      });
+
+      dailyEvolution.push({
+        date: dateLabel,
+        users: dayUsers,
+        orders: dayOrders.length,
+        revenue: dayOrders.reduce((sum, o) => sum + o.amountXOF, 0)
+      });
+    }
 
     return {
       totalUsers: users.length,
+      newUsersToday,
+      newUsers7Days,
+      newUsers30Days,
+      activeUsersCount,
+      suspendedUsersCount,
       totalCVs: cvs.length,
-      activeSubscriptions: activeSubs,
-      confirmedPaymentsCount: confirmed.length,
-      totalRevenueXOF: totalRev,
-      pendingManualOrdersCount: pendingOrders.length,
+      totalOrders: manualOrders.length,
+      pendingPaymentsCount: pendingOrders.length,
+      approvedPaymentsCount: approvedOrders.length,
+      rejectedPaymentsCount: rejectedOrders.length,
+      totalRevenueXOF,
+      salesByPlan,
+      dailyEvolution,
       recentPayments: payments.slice(0, 10),
       manualOrders
     };

@@ -185,6 +185,9 @@ export interface UserProfile {
   phoneNumber?: string;
   role: 'user' | 'admin';
   subscription?: UserSubscription;
+  isSuspended?: boolean;
+  suspendedReason?: string;
+  suspendedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -249,11 +252,27 @@ export interface AuditLog {
 
 export interface AdminMetrics {
   totalUsers: number;
+  newUsersToday: number;
+  newUsers7Days: number;
+  newUsers30Days: number;
+  activeUsersCount: number;
+  suspendedUsersCount: number;
   totalCVs: number;
-  activeSubscriptions: number;
-  confirmedPaymentsCount: number;
+  totalOrders: number;
+  pendingPaymentsCount: number;
+  approvedPaymentsCount: number;
+  rejectedPaymentsCount: number;
   totalRevenueXOF: number;
-  pendingManualOrdersCount: number;
+  salesByPlan: {
+    cand_24h: { count: number; revenue: number };
+    career_30d: { count: number; revenue: number };
+  };
+  dailyEvolution: {
+    date: string;
+    users: number;
+    orders: number;
+    revenue: number;
+  }[];
   recentPayments: PaymentTransaction[];
   manualOrders: ManualPaymentOrder[];
 }

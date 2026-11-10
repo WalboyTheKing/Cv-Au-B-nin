@@ -53,15 +53,17 @@ export const HowItWorks: React.FC = () => {
           {steps.map((st, idx) => (
             <div
               key={idx}
-              className="relative bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md transition-shadow"
+              className="relative bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs card-interactive group"
             >
               <div className="flex items-center justify-between mb-4">
-                <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center">
-                  {st.icon}
+                <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200">
+                  {React.cloneElement(st.icon, {
+                    className: 'w-6 h-6 text-emerald-600 group-hover:text-white transition-colors duration-200'
+                  })}
                 </div>
-                <span className="text-2xl font-black text-slate-200 font-mono">{st.num}</span>
+                <span className="text-2xl font-black text-slate-200 font-mono group-hover:text-emerald-300 transition-colors">{st.num}</span>
               </div>
-              <h4 className="font-bold text-slate-900 text-sm mb-2">{st.title}</h4>
+              <h4 className="font-bold text-slate-900 text-sm mb-2 group-hover:text-emerald-800 transition-colors">{st.title}</h4>
               <p className="text-xs text-slate-600 leading-relaxed">{st.desc}</p>
             </div>
           ))}

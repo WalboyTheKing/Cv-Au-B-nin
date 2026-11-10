@@ -147,10 +147,10 @@ export const TemplateShowcase: React.FC<TemplateShowcaseProps> = ({ onSelectTemp
               <div className="p-5 pt-0">
                 <button
                   onClick={() => onSelectTemplate(tpl.id)}
-                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs group-hover:shadow-md"
                 >
                   <span>Utiliser ce modèle</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-1" />
                 </button>
               </div>
             </div>

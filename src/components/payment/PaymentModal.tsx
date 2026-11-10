@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CVData, ManualPaymentOrder, Plan, UserProfile } from '../../types';
 import { MOOV_MONEY_BENEFICIARY } from '../../config';
 import { paymentService } from '../../services/paymentService';
@@ -58,38 +58,43 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [proofUrl, setProofUrl] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Initialisation de la commande à l'ouverture de la modale
-  useEffect(() => {
-    if (plan && plan.priceXOF > 0) {
-      setAmountDeclared(plan.priceXOF);
-      const res = paymentService.createOrder({
-        userId: currentUser.id,
-        userEmail: currentUser.email,
-        userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
-        planId: plan.id,
-        cvId: targetCV?.id,
-        cvTitle: targetCV?.title
-      });
-      if (res.success && res.order) {
-        setCurrentOrder(res.order);
-        onOrderCreated?.(res.order);
+  const initKeyRef = useRef<string>('');
 
-        // Synchronisation asynchrone côté serveur
-        fetch('/api/orders/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: currentUser.id,
-            userEmail: currentUser.email,
-            userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
-            planCode: plan.code,
-            cvId: targetCV?.id,
-            cvTitle: targetCV?.title
-          })
-        }).catch((err) => console.warn('Serveur non joignable pour créer la commande', err));
-      }
+  // Initialisation stable de la commande à l'ouverture de la modale (une seule fois par session)
+  useEffect(() => {
+    if (!plan || plan.priceXOF <= 0) return;
+    const sessionKey = `${plan.id}_${currentUser.id}_${targetCV?.id || 'nocv'}`;
+    if (initKeyRef.current === sessionKey) return;
+    initKeyRef.current = sessionKey;
+
+    setAmountDeclared(plan.priceXOF);
+    const res = paymentService.createOrder({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
+      planId: plan.id,
+      cvId: targetCV?.id,
+      cvTitle: targetCV?.title
+    });
+    if (res.success && res.order) {
+      setCurrentOrder(res.order);
+      onOrderCreated?.(res.order);
+
+      // Synchronisation asynchrone côté serveur
+      fetch('/api/orders/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          userEmail: currentUser.email,
+          userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
+          planCode: plan.code,
+          cvId: targetCV?.id,
+          cvTitle: targetCV?.title
+        })
+      }).catch((err) => console.warn('Serveur non joignable pour créer la commande', err));
     }
-  }, [plan, currentUser, targetCV]);
+  }, [plan?.id, currentUser.id, targetCV?.id]);
 
   if (!plan) return null;
 

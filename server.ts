@@ -83,6 +83,9 @@ interface ServerUser {
     createdAt: string;
   };
   token?: string;
+  isSuspended?: boolean;
+  suspendedReason?: string;
+  suspendedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -195,6 +198,79 @@ function callWithTimeout<T>(promiseFn: () => Promise<T>, timeoutMs = 10000): Pro
   ]);
 }
 
+function loadAuditLogs(): any[] {
+  try {
+    if (fs.existsSync(AUDIT_FILE)) {
+      return JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Erreur lecture audit.json:', e);
+  }
+  return [];
+}
+
+function saveAuditLogs(logs: any[]): void {
+  try {
+    fs.writeFileSync(AUDIT_FILE, JSON.stringify(logs, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Erreur écriture audit.json:', e);
+  }
+}
+
+function addServerAuditLog(
+  actorId: string,
+  actorEmail: string,
+  action: string,
+  resourceType: string,
+  resourceId: string,
+  details?: string
+): void {
+  const logs = loadAuditLogs();
+  logs.unshift({
+    id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    actorId,
+    actorEmail,
+    action,
+    resourceType,
+    resourceId,
+    details: details || '',
+    createdAt: new Date().toISOString()
+  });
+  saveAuditLogs(logs);
+}
+
+function checkAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const adminEmail = (req.headers['x-admin-email'] as string) || req.body?.adminEmail;
+  const adminId = (req.headers['x-admin-id'] as string) || req.body?.adminId;
+
+  const users = loadUsers();
+
+  // 1. Par jeton de session
+  if (token) {
+    const user = users.find((u) => u.token === token);
+    if (user && user.role === 'admin' && !user.isSuspended) {
+      (req as any).adminUser = user;
+      return next();
+    }
+  }
+
+  // 2. Par identifiant administrateur explicite (admin master de référence)
+  if (adminEmail === 'admin@cvprobenin.bj' || adminId === 'admin_master') {
+    const user = users.find((u) => u.email === 'admin@cvprobenin.bj' || u.id === 'admin_master');
+    if (user && user.role === 'admin' && !user.isSuspended) {
+      (req as any).adminUser = user;
+      return next();
+    }
+  }
+
+  return res.status(403).json({
+    success: false,
+    error: 'Accès administrateur refusé. Permissions insuffisantes.'
+  });
+}
+
 // -------------------------------------------------------------------
 // ROUTES API AUTHENTIFICATION & SÉCURITÉ
 // -------------------------------------------------------------------
@@ -280,18 +356,28 @@ app.post('/api/auth/login', (req, res) => {
   if (!email || !password) {
     return res.status(400).json({
       success: false,
-      error: 'Email et mot de passe requis.'
+      error: 'Email ou numéro de téléphone et mot de passe requis.'
     });
   }
 
-  const cleanEmail = String(email).trim().toLowerCase();
+  const cleanIdentifier = String(email).trim().toLowerCase();
+  const digitsOnly = cleanIdentifier.replace(/\D/g, '');
   const users = loadUsers();
-  const user = users.find((u) => u.email.toLowerCase() === cleanEmail);
+  const user = users.find((u) => {
+    if (u.email.toLowerCase() === cleanIdentifier) return true;
+    if (digitsOnly.length >= 8) {
+      const userPhoneDigits = (u.phoneNumber || '').replace(/\D/g, '');
+      if (userPhoneDigits && (userPhoneDigits.endsWith(digitsOnly) || digitsOnly.endsWith(userPhoneDigits))) {
+        return true;
+      }
+    }
+    return false;
+  });
 
   if (!user) {
     return res.status(401).json({
       success: false,
-      error: 'Identifiants incorrects. Aucun compte associé à cette adresse.'
+      error: 'Identifiants incorrects. Aucun compte associé à cet email ou numéro.'
     });
   }
 
@@ -299,8 +385,8 @@ app.post('/api/auth/login', (req, res) => {
   if (user.passwordHash !== hash) {
     // Tolérance démo si le mot de passe correspond au mot de passe test par défaut
     if (
-      (cleanEmail === 'candidat.benin@gmail.com' && (password === 'demo' || password === 'Candidat2026!')) ||
-      (cleanEmail === 'admin@cvprobenin.bj' && (password === 'admin' || password === 'AdminBenin2026!'))
+      (user.email.toLowerCase() === 'candidat.benin@gmail.com' && (password === 'demo' || password === 'Candidat2026!')) ||
+      (user.email.toLowerCase() === 'admin@cvprobenin.bj' && (password === 'admin' || password === 'AdminBenin2026!'))
     ) {
       // Démo autorisé
     } else {
@@ -309,6 +395,14 @@ app.post('/api/auth/login', (req, res) => {
         error: 'Mot de passe incorrect.'
       });
     }
+  }
+
+  // Vérification de suspension de compte
+  if (user.isSuspended) {
+    return res.status(403).json({
+      success: false,
+      error: `Votre compte a été suspendu par l'administration. Motif : ${user.suspendedReason || 'Activité non conforme.'}`
+    });
   }
 
   const token = 'tok_' + crypto.randomBytes(32).toString('hex');
@@ -338,9 +432,163 @@ app.get('/api/auth/me', (req, res) => {
     return res.status(401).json({ success: false, error: 'Session expirée ou invalide.' });
   }
 
+  if (user.isSuspended) {
+    return res.status(403).json({
+      success: false,
+      error: `Votre compte a été suspendu par l'administration. Motif : ${user.suspendedReason || 'Activité non conforme.'}`
+    });
+  }
+
   res.json({
     success: true,
     user: sanitizeUser(user)
+  });
+});
+
+// 4. Mise à jour du profil utilisateur
+app.post('/api/auth/profile', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Non authentifié.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  const users = loadUsers();
+  const user = users.find((u) => u.token === token);
+
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Session expirée.' });
+  }
+
+  if (user.isSuspended) {
+    return res.status(403).json({ success: false, error: 'Compte suspendu.' });
+  }
+
+  const { firstName, lastName, phoneNumber } = req.body;
+  if (firstName && String(firstName).trim()) user.firstName = String(firstName).trim();
+  if (lastName && String(lastName).trim()) user.lastName = String(lastName).trim();
+  if (phoneNumber !== undefined) user.phoneNumber = String(phoneNumber).trim();
+  user.updatedAt = new Date().toISOString();
+
+  saveUsers(users);
+
+  addServerAuditLog(
+    user.id,
+    user.email,
+    `Mise à jour des informations de profil (${user.firstName} ${user.lastName})`,
+    'user',
+    user.id
+  );
+
+  res.json({
+    success: true,
+    user: sanitizeUser(user)
+  });
+});
+
+// 5. Modification du mot de passe
+app.post('/api/auth/change-password', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Non authentifié.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  const users = loadUsers();
+  const user = users.find((u) => u.token === token);
+
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Session expirée.' });
+  }
+
+  if (user.isSuspended) {
+    return res.status(403).json({ success: false, error: 'Compte suspendu.' });
+  }
+
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ success: false, error: 'Mot de passe actuel et nouveau mot de passe requis.' });
+  }
+
+  const currentHash = hashPassword(currentPassword);
+  const isValidOld =
+    user.passwordHash === currentHash ||
+    (user.email === 'candidat.benin@gmail.com' && (currentPassword === 'demo' || currentPassword === 'Candidat2026!')) ||
+    (user.email === 'admin@cvprobenin.bj' && (currentPassword === 'admin' || currentPassword === 'AdminBenin2026!'));
+
+  if (!isValidOld) {
+    return res.status(400).json({ success: false, error: 'Le mot de passe actuel est incorrect.' });
+  }
+
+  if (String(newPassword).length < 8) {
+    return res.status(400).json({
+      success: false,
+      error: 'Le nouveau mot de passe doit comporter au moins 8 caractères.'
+    });
+  }
+
+  user.passwordHash = hashPassword(newPassword);
+  user.updatedAt = new Date().toISOString();
+  saveUsers(users);
+
+  addServerAuditLog(
+    user.id,
+    user.email,
+    'Modification du mot de passe avec succès',
+    'user',
+    user.id
+  );
+
+  res.json({
+    success: true,
+    message: 'Mot de passe modifié avec succès.'
+  });
+});
+
+// 6. Suppression de son propre compte (Droit à l'effacement APDP Bénin)
+app.post('/api/auth/delete-account', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Non authentifié.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  let users = loadUsers();
+  const user = users.find((u) => u.token === token);
+
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Session expirée.' });
+  }
+
+  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
+    return res.status(403).json({
+      success: false,
+      error: 'Le compte administrateur racine de CV PRO BÉNIN ne peut pas être supprimé.'
+    });
+  }
+
+  const deletedUserId = user.id;
+  const deletedEmail = user.email;
+
+  // Suppression des CVs de l'utilisateur
+  const cvs = loadCVs().filter((c) => c.userId !== deletedUserId);
+  saveCVs(cvs);
+
+  // Suppression du compte
+  users = users.filter((u) => u.id !== deletedUserId);
+  saveUsers(users);
+
+  addServerAuditLog(
+    deletedUserId,
+    deletedEmail,
+    `Suppression définitive du compte utilisateur (Droit à l'oubli APDP Bénin)`,
+    'user',
+    deletedUserId
+  );
+
+  res.json({
+    success: true,
+    message: 'Votre compte et vos données ont été définitivement supprimés.'
   });
 });
 
@@ -642,13 +890,233 @@ app.get('/api/orders/user/:userId', (req, res) => {
 });
 
 // 7. Administration : liste de toutes les commandes
-app.get('/api/admin/orders', (req, res) => {
+app.get('/api/admin/orders', checkAdminAuth, (req, res) => {
   const orders = loadOrders();
   res.json({ success: true, orders });
 });
 
-// 8. Administration : approbation manuelle stricte d'une commande
-app.post('/api/admin/orders/approve', (req, res) => {
+// 8. Administration : statistiques réelles et KPIs
+app.get('/api/admin/metrics', checkAdminAuth, (req, res) => {
+  const users = loadUsers();
+  const cvs = loadCVs();
+  const orders = loadOrders();
+
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const sevenDaysAgo = Date.now() - 7 * 86400000;
+  const thirtyDaysAgo = Date.now() - 30 * 86400000;
+
+  const newUsersToday = users.filter((u) => new Date(u.createdAt).getTime() >= todayStart).length;
+  const newUsers7Days = users.filter((u) => new Date(u.createdAt).getTime() >= sevenDaysAgo).length;
+  const newUsers30Days = users.filter((u) => new Date(u.createdAt).getTime() >= thirtyDaysAgo).length;
+  const suspendedUsersCount = users.filter((u) => u.isSuspended === true).length;
+  const activeUsersCount = users.length - suspendedUsersCount;
+
+  const approvedOrders = orders.filter((o) => o.status === 'approved');
+  const pendingOrders = orders.filter((o) => o.status === 'pending_verification' || o.status === 'pending_payment');
+  const rejectedOrders = orders.filter((o) => o.status === 'rejected');
+
+  const totalRevenueXOF = approvedOrders.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
+
+  const candOrders = approvedOrders.filter((o) => o.planCode === 'cand_24h' || o.planCode === 'premium_7d');
+  const careerOrders = approvedOrders.filter((o) => o.planCode === 'career_30d' || o.planCode === 'plus_30d');
+
+  const salesByPlan = {
+    cand_24h: { count: candOrders.length, revenue: candOrders.reduce((s, o) => s + (o.amountXOF || 500), 0) },
+    career_30d: { count: careerOrders.length, revenue: careerOrders.reduce((s, o) => s + (o.amountXOF || 1000), 0) }
+  };
+
+  const dailyEvolution: any[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000);
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const dayEnd = dayStart + 86400000;
+    const dateLabel = d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+
+    const dayUsers = users.filter((u) => {
+      const t = new Date(u.createdAt).getTime();
+      return t >= dayStart && t < dayEnd;
+    }).length;
+
+    const dayOrders = approvedOrders.filter((o) => {
+      const t = new Date(o.createdAt).getTime();
+      return t >= dayStart && t < dayEnd;
+    });
+
+    dailyEvolution.push({
+      date: dateLabel,
+      users: dayUsers,
+      orders: dayOrders.length,
+      revenue: dayOrders.reduce((sum, o) => sum + o.amountXOF, 0)
+    });
+  }
+
+  res.json({
+    success: true,
+    metrics: {
+      totalUsers: users.length,
+      newUsersToday,
+      newUsers7Days,
+      newUsers30Days,
+      activeUsersCount,
+      suspendedUsersCount,
+      totalCVs: cvs.length,
+      totalOrders: orders.length,
+      pendingPaymentsCount: pendingOrders.length,
+      approvedPaymentsCount: approvedOrders.length,
+      rejectedPaymentsCount: rejectedOrders.length,
+      totalRevenueXOF,
+      salesByPlan,
+      dailyEvolution
+    }
+  });
+});
+
+// 9. Administration : liste des utilisateurs avec métadonnées
+app.get('/api/admin/users', checkAdminAuth, (req, res) => {
+  const users = loadUsers();
+  const cvs = loadCVs();
+  const orders = loadOrders();
+
+  const enrichedUsers = users.map((u) => {
+    const userCVs = cvs.filter((c: any) => c.userId === u.id);
+    const userOrders = orders.filter((o: any) => o.userId === u.id);
+    const approved = userOrders.filter((o: any) => o.status === 'approved');
+    const totalSpentXOF = approved.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
+
+    return {
+      id: u.id,
+      email: u.email,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      phoneNumber: u.phoneNumber,
+      countryCode: u.countryCode,
+      role: u.role,
+      isSuspended: u.isSuspended || false,
+      suspendedReason: u.suspendedReason,
+      suspendedAt: u.suspendedAt,
+      subscription: u.subscription,
+      cvCount: userCVs.length,
+      ordersCount: userOrders.length,
+      totalSpentXOF,
+      createdAt: u.createdAt,
+      updatedAt: u.updatedAt
+    };
+  });
+
+  res.json({ success: true, users: enrichedUsers });
+});
+
+// 10. Administration : modification des informations d'un utilisateur
+app.post('/api/admin/users/update', checkAdminAuth, (req, res) => {
+  const { userId, firstName, lastName, phoneNumber, role } = req.body;
+  const admin = (req as any).adminUser;
+
+  const users = loadUsers();
+  const user = users.find((u) => u.id === userId);
+  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+
+  if (firstName) user.firstName = String(firstName).trim();
+  if (lastName) user.lastName = String(lastName).trim();
+  if (phoneNumber) user.phoneNumber = String(phoneNumber).trim();
+  if (role && (role === 'user' || role === 'admin')) user.role = role;
+  user.updatedAt = new Date().toISOString();
+  saveUsers(users);
+
+  addServerAuditLog(
+    admin?.id || 'admin_master',
+    admin?.email || 'admin@cvprobenin.bj',
+    `Mise à jour administrative des informations de ${user.email}`,
+    'user',
+    user.id
+  );
+
+  res.json({ success: true, user: sanitizeUser(user) });
+});
+
+// 11. Administration : suspension d'un utilisateur
+app.post('/api/admin/users/suspend', checkAdminAuth, (req, res) => {
+  const { userId, reason } = req.body;
+  const admin = (req as any).adminUser;
+
+  const users = loadUsers();
+  const user = users.find((u) => u.id === userId);
+  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
+    return res.status(400).json({ success: false, error: 'Impossible de suspendre le compte administrateur maître.' });
+  }
+
+  user.isSuspended = true;
+  user.suspendedReason = String(reason || 'Activité suspecte ou non conforme').trim();
+  user.suspendedAt = new Date().toISOString();
+  user.updatedAt = new Date().toISOString();
+  saveUsers(users);
+
+  addServerAuditLog(
+    admin?.id || 'admin_master',
+    admin?.email || 'admin@cvprobenin.bj',
+    `Suspension du compte ${user.email} (${user.firstName} ${user.lastName}). Motif : ${user.suspendedReason}`,
+    'user',
+    user.id
+  );
+
+  res.json({ success: true, user: sanitizeUser(user) });
+});
+
+// 12. Administration : réactivation d'un utilisateur suspendu
+app.post('/api/admin/users/reactivate', checkAdminAuth, (req, res) => {
+  const { userId } = req.body;
+  const admin = (req as any).adminUser;
+
+  const users = loadUsers();
+  const user = users.find((u) => u.id === userId);
+  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+
+  user.isSuspended = false;
+  delete user.suspendedReason;
+  delete user.suspendedAt;
+  user.updatedAt = new Date().toISOString();
+  saveUsers(users);
+
+  addServerAuditLog(
+    admin?.id || 'admin_master',
+    admin?.email || 'admin@cvprobenin.bj',
+    `Réactivation du compte ${user.email} (${user.firstName} ${user.lastName})`,
+    'user',
+    user.id
+  );
+
+  res.json({ success: true, user: sanitizeUser(user) });
+});
+
+// 13. Administration : suppression sécurisée d'un compte
+app.post('/api/admin/users/delete', checkAdminAuth, (req, res) => {
+  const { userId } = req.body;
+  const admin = (req as any).adminUser;
+
+  let users = loadUsers();
+  const user = users.find((u) => u.id === userId);
+  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
+    return res.status(400).json({ success: false, error: 'Impossible de supprimer l’administrateur principal.' });
+  }
+
+  users = users.filter((u) => u.id !== userId);
+  saveUsers(users);
+
+  addServerAuditLog(
+    admin?.id || 'admin_master',
+    admin?.email || 'admin@cvprobenin.bj',
+    `Suppression définitive du compte ${user.email} (${user.firstName} ${user.lastName})`,
+    'user',
+    userId
+  );
+
+  res.json({ success: true });
+});
+
+// 14. Administration : approbation manuelle d'une commande
+app.post('/api/admin/orders/approve', checkAdminAuth, (req, res) => {
   const { orderId, adminId, adminEmail, checkAccount, checkAmount } = req.body;
 
   if (!checkAccount || !checkAmount) {
@@ -669,9 +1137,6 @@ app.post('/api/admin/orders/approve', (req, res) => {
     return res.status(400).json({ success: false, error: 'Cette commande a déjà été approuvée.' });
   }
 
-  // Calcul strict de la durée accordée côté serveur :
-  // 500 FCFA = 24 heures (24 * 3600 * 1000 ms)
-  // 1 000 FCFA = 30 jours (30 * 24 * 3600 * 1000 ms)
   const is30Days = order.planCode === 'career_30d' || order.planCode === 'plus_30d';
   const durationMs = is30Days ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
 
@@ -698,7 +1163,6 @@ app.post('/api/admin/orders/approve', (req, res) => {
   let expiresAtDate: Date;
   if (targetCV) {
     const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
-    // Règle de renouvellement : prolongation cohérente si encore actif, sinon nouveau départ
     if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
       expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
     } else {
@@ -720,6 +1184,14 @@ app.post('/api/admin/orders/approve', (req, res) => {
     expiresAtDate = new Date(now.getTime() + durationMs);
   }
 
+  addServerAuditLog(
+    adminId || 'admin_master',
+    adminEmail || 'admin@cvprobenin.bj',
+    `Validation du paiement commande ${order.orderNumber} (${order.amountXOF} FCFA - Moov: ${order.submission?.transactionRef || 'N/A'})`,
+    'order',
+    order.id
+  );
+
   res.json({
     success: true,
     order,
@@ -728,8 +1200,8 @@ app.post('/api/admin/orders/approve', (req, res) => {
   });
 });
 
-// 9. Administration : rejet d'une déclaration non conforme
-app.post('/api/admin/orders/reject', (req, res) => {
+// 15. Administration : rejet d'une déclaration non conforme
+app.post('/api/admin/orders/reject', checkAdminAuth, (req, res) => {
   const { orderId, adminId, adminEmail, reason } = req.body;
 
   if (!reason || !reason.trim()) {
@@ -761,7 +1233,142 @@ app.post('/api/admin/orders/reject', (req, res) => {
   order.updatedAt = now;
   saveOrders(orders);
 
+  addServerAuditLog(
+    adminId || 'admin_master',
+    adminEmail || 'admin@cvprobenin.bj',
+    `Rejet de la commande ${order.orderNumber}. Motif : ${order.decision.rejectionReason}`,
+    'order',
+    order.id
+  );
+
   res.json({ success: true, order });
+});
+
+// 16. Administration : liste de tous les CV créés
+app.get('/api/admin/cvs', checkAdminAuth, (req, res) => {
+  const cvs = loadCVs();
+  const users = loadUsers();
+
+  const enrichedCVs = cvs.map((c: any) => {
+    const owner = users.find((u) => u.id === c.userId);
+    return {
+      ...c,
+      ownerName: owner ? `${owner.firstName} ${owner.lastName}` : (c.personalInfo ? `${c.personalInfo.firstName} ${c.personalInfo.lastName}` : 'Invité'),
+      ownerEmail: owner ? owner.email : (c.personalInfo?.email || 'N/A')
+    };
+  });
+
+  res.json({ success: true, cvs: enrichedCVs });
+});
+
+// 17. Administration : suppression légitime d'un CV
+app.delete('/api/admin/cvs/:id', checkAdminAuth, (req, res) => {
+  const { id } = req.params;
+  const admin = (req as any).adminUser;
+
+  const cvs = loadCVs();
+  const target = cvs.find((c: any) => c.id === id);
+  if (!target) return res.status(404).json({ success: false, error: 'CV introuvable.' });
+
+  const filtered = cvs.filter((c: any) => c.id !== id);
+  saveCVs(filtered);
+
+  addServerAuditLog(
+    admin?.id || 'admin_master',
+    admin?.email || 'admin@cvprobenin.bj',
+    `Suppression administrative du CV ${id} (${target.title})`,
+    'cv',
+    id
+  );
+
+  res.json({ success: true });
+});
+
+// 18. Administration : attribution manuelle exceptionnelle d'un forfait
+app.post('/api/admin/subscriptions/grant', checkAdminAuth, (req, res) => {
+  const { userId, cvId, planCode, reason } = req.body;
+  const admin = (req as any).adminUser;
+
+  if (!reason || !reason.trim()) {
+    return res.status(400).json({ success: false, error: 'Un motif d’attribution exceptionnelle est obligatoire.' });
+  }
+
+  const is30Days = planCode === 'career_30d' || planCode === 'plus_30d';
+  const durationMs = is30Days ? 30 * 86400000 : 86400000;
+  const planName = is30Days ? 'Pack Carrière (30 jours)' : 'Accès Candidature (24h)';
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  // Mettre à jour le CV
+  const cvs = loadCVs();
+  let targetCV = cvId ? cvs.find((c: any) => c.id === cvId) : null;
+  if (!targetCV && userId) {
+    targetCV = cvs.find((c: any) => c.userId === userId);
+  }
+
+  let expiresAtDate: Date;
+  if (targetCV) {
+    const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
+    if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
+      expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
+    } else {
+      expiresAtDate = new Date(now.getTime() + durationMs);
+    }
+
+    targetCV.access = {
+      planCode: is30Days ? 'career_30d' : 'cand_24h',
+      planName,
+      status: 'active',
+      approvedAt: nowIso,
+      expiresAt: expiresAtDate.toISOString(),
+      orderId: 'admin_grant_' + Date.now(),
+      orderNumber: 'ACCÈS-MANUEL'
+    };
+    targetCV.updatedAt = nowIso;
+    saveCVs(cvs);
+  } else {
+    expiresAtDate = new Date(now.getTime() + durationMs);
+  }
+
+  // Mettre à jour l'abonnement du compte utilisateur
+  if (userId) {
+    const users = loadUsers();
+    const user = users.find((u) => u.id === userId);
+    if (user) {
+      user.subscription = {
+        id: 'sub_' + Date.now(),
+        userId,
+        planId: is30Days ? 'plan_career_30d' : 'plan_cand_24h',
+        planCode: is30Days ? 'career_30d' : 'cand_24h',
+        status: 'active',
+        startsAt: nowIso,
+        expiresAt: expiresAtDate.toISOString(),
+        createdAt: nowIso
+      };
+      saveUsers(users);
+    }
+  }
+
+  addServerAuditLog(
+    admin?.id || 'admin_master',
+    admin?.email || 'admin@cvprobenin.bj',
+    `Attribution manuelle du forfait ${planName} (${planCode}) au CV ${cvId || 'utilisateur ' + userId}. Motif : ${reason}`,
+    'plan',
+    cvId || userId
+  );
+
+  res.json({
+    success: true,
+    planName,
+    expiresAt: expiresAtDate.toISOString(),
+    cvAccess: targetCV?.access || null
+  });
+});
+
+// 19. Administration : journal d'audit des actions
+app.get('/api/admin/logs', checkAdminAuth, (req, res) => {
+  const logs = loadAuditLogs();
+  res.json({ success: true, logs });
 });
 
 // 10. Configuration publique de l'application

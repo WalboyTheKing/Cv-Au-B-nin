@@ -110,12 +110,12 @@ export const PricingSection: React.FC<PricingSectionProps> = ({
                   <button
                     onClick={() => onSelectPlan(plan)}
                     disabled={isCurrent}
-                    className={`w-full py-3 px-4 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm ${
+                    className={`w-full py-3.5 px-4 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-md active:scale-95 ${
                       isCurrent
-                        ? 'bg-slate-200 text-slate-500 cursor-default'
+                        ? 'bg-slate-200 text-slate-500 cursor-default active:scale-100'
                         : isFeatured
-                        ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black'
-                        : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                        ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black shadow-emerald-500/25'
+                        : 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-emerald-700/20'
                     }`}
                   >
                     {isCurrent

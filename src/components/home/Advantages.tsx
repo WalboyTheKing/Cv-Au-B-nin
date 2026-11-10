@@ -86,13 +86,15 @@ export const Advantages: React.FC = () => {
           {items.map((item, idx) => (
             <div
               key={idx}
-              className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md transition-shadow flex flex-col justify-between"
+              className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs card-interactive flex flex-col justify-between group"
             >
               <div>
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4">
-                  {item.icon}
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200">
+                  {React.cloneElement(item.icon, {
+                    className: 'w-5 h-5 text-emerald-600 group-hover:text-white transition-colors duration-200'
+                  })}
                 </div>
-                <h4 className="font-bold text-slate-900 text-sm mb-2">{item.title}</h4>
+                <h4 className="font-bold text-slate-900 text-sm mb-2 group-hover:text-emerald-800 transition-colors">{item.title}</h4>
                 <p className="text-xs text-slate-600 leading-relaxed">{item.description}</p>
               </div>
             </div>

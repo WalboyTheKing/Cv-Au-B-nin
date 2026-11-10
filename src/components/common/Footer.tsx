@@ -5,14 +5,15 @@
 
 import React from 'react';
 import { APP_CONFIG } from '../../config';
-import { FileText, Phone, Mail, MapPin, ShieldCheck, Heart } from 'lucide-react';
+import { FileText, Phone, Mail, MapPin, ShieldCheck, Heart, Lock } from 'lucide-react';
 
 interface FooterProps {
   onOpenLegal: (topic: 'cgu' | 'privacy' | 'mentions' | 'refund' | 'data') => void;
   onNavigate: (tab: string) => void;
+  onOpenAuth?: () => void;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onOpenLegal, onNavigate }) => {
+export const Footer: React.FC<FooterProps> = ({ onOpenLegal, onNavigate, onOpenAuth }) => {
   return (
     <footer className="bg-slate-900 text-slate-300 pt-14 pb-8 border-t border-slate-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -171,10 +172,22 @@ export const Footer: React.FC<FooterProps> = ({ onOpenLegal, onNavigate }) => {
 
         {/* Bas de page */}
         <div className="pt-8 flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500">
-          <p>© {new Date().getFullYear()} {APP_CONFIG.brandName}. Tous droits réservés.</p>
+          <div className="flex items-center gap-2">
+            <p>© {new Date().getFullYear()} {APP_CONFIG.brandName}. Tous droits réservés.</p>
+            {onOpenAuth && (
+              <button
+                onClick={onOpenAuth}
+                title="Espace sécurisé"
+                className="text-slate-600 hover:text-slate-400 p-1 transition-colors cursor-pointer"
+                aria-label="Accès sécurisé"
+              >
+                <Lock className="w-3 h-3" />
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-1.5 text-slate-400">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Sécurité des données personnelles certifiée • Fichiers confidentiels</span>
+            <span>Sécurité des données personnelles certifiée • Conformité APDP Bénin</span>
           </div>
         </div>
       </div>

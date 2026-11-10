@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CVData, PaymentTransaction, Plan, UserProfile } from '../../types';
 import { storageService } from '../../services/storage';
-import { generateCVPdf } from '../../services/pdfGenerator';
 import {
   FileText,
   Plus,
@@ -20,7 +19,13 @@ import {
   Shield,
   Clock,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Lock,
+  Phone,
+  Mail,
+  KeyRound,
+  ExternalLink,
+  Info
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -30,6 +35,7 @@ interface DashboardProps {
   onCreateNewCV: () => void;
   onOpenPricing: (targetCV?: CVData) => void;
   onRefreshData: () => void;
+  onLogout?: () => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -38,24 +44,44 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onEditCV,
   onCreateNewCV,
   onOpenPricing,
-  onRefreshData
+  onRefreshData,
+  onLogout
 }) => {
-  const [activeTab, setActiveTab] = useState<'cvs' | 'subscription' | 'profile'>('cvs');
+  const [activeTab, setActiveTab] = useState<'cvs' | 'orders' | 'subscription' | 'profile'>('cvs');
   const [deleteModalCVId, setDeleteModalCVId] = useState<string | null>(null);
   const [renameCVId, setRenameCVId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState<string>('');
   const [nowTimestamp, setNowTimestamp] = useState<number>(Date.now());
 
+  // Formulaire d'édition du profil
+  const [firstName, setFirstName] = useState<string>(currentUser.firstName || '');
+  const [lastName, setLastName] = useState<string>(currentUser.lastName || '');
+  const [phoneNumber, setPhoneNumber] = useState<string>(currentUser.phoneNumber || '');
+  const [profileSaving, setProfileSaving] = useState<boolean>(false);
+  const [profileMessage, setProfileMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Formulaire de changement de mot de passe
+  const [currentPassword, setCurrentPassword] = useState<string>('');
+  const [newPassword, setNewPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [passwordSaving, setPasswordSaving] = useState<boolean>(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Modale de suppression de compte
+  const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState<boolean>(false);
+  const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState<string>('');
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState<boolean>(false);
+
   // Horloge en temps réel pour le décompte seconde par seconde
-  React.useEffect(() => {
+  useEffect(() => {
     const timer = setInterval(() => {
       setNowTimestamp(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const payments = storageService.getPayments(currentUser.id);
   const manualOrders = storageService.getManualOrders(currentUser.id);
+  const payments = storageService.getPayments(currentUser.id);
   const subscription = currentUser.subscription;
 
   const handleDeleteConfirm = () => {
@@ -83,6 +109,78 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfileSaving(true);
+    setProfileMessage(null);
+    try {
+      const res = await storageService.updateMyProfile({
+        firstName,
+        lastName,
+        phoneNumber
+      });
+      if (res.success) {
+        setProfileMessage({ type: 'success', text: 'Profil mis à jour avec succès.' });
+        onRefreshData();
+      } else {
+        setProfileMessage({ type: 'error', text: res.error || 'Erreur lors de la mise à jour.' });
+      }
+    } catch {
+      setProfileMessage({ type: 'error', text: 'Une erreur imprévue est survenue.' });
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordMessage(null);
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ type: 'error', text: 'Les deux mots de passe ne correspondent pas.' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPasswordMessage({ type: 'error', text: 'Le nouveau mot de passe doit comporter au moins 8 caractères.' });
+      return;
+    }
+    setPasswordSaving(true);
+    try {
+      const res = await storageService.changeMyPassword(currentPassword, newPassword);
+      if (res.success) {
+        setPasswordMessage({ type: 'success', text: 'Mot de passe modifié avec succès.' });
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        setPasswordMessage({ type: 'error', text: res.error || 'Erreur lors du changement de mot de passe.' });
+      }
+    } catch {
+      setPasswordMessage({ type: 'error', text: 'Impossible de joindre le service de sécurité.' });
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteAccountConfirmText !== 'SUPPRIMER') return;
+    setDeleteAccountLoading(true);
+    try {
+      const res = await storageService.deleteMyAccount();
+      if (res.success) {
+        setDeleteAccountModalOpen(false);
+        if (onLogout) {
+          onLogout();
+        } else {
+          window.location.href = '/';
+        }
+      } else {
+        alert(res.error || 'Impossible de supprimer le compte.');
+      }
+    } finally {
+      setDeleteAccountLoading(false);
+    }
+  };
+
   const planQuota = subscription?.planCode === 'plus_30d' ? 10 : subscription?.planCode === 'premium_7d' ? 3 : 1;
   const isQuotaReached = cvs.length >= planQuota;
 
@@ -93,13 +191,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 px-3 py-0.5 rounded-full text-xs font-bold mb-2">
-              <span>Espace Personnel • Bénin</span>
+              <Shield className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Espace Personnel Candidat • République du Bénin</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
               Bonjour, {currentUser.firstName} {currentUser.lastName}
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Gérez vos documents de candidature et suivez vos forfaits de téléchargement.
+              {currentUser.email} • Suivez vos documents et vos droits d'exportation Moov Money.
             </p>
           </div>
 
@@ -110,7 +209,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer ${
                 isQuotaReached
                   ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                  : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                  : 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-emerald-700/20'
               }`}
             >
               <Plus className="w-4 h-4" />
@@ -120,10 +219,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Onglets de navigation */}
-        <div className="flex border-b border-slate-200 gap-6 text-xs font-bold">
+        <div className="flex border-b border-slate-200 gap-4 sm:gap-6 text-xs font-bold overflow-x-auto pb-px">
           <button
             onClick={() => setActiveTab('cvs')}
-            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === 'cvs'
                 ? 'border-emerald-700 text-emerald-800'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -134,27 +233,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </button>
 
           <button
-            onClick={() => setActiveTab('subscription')}
-            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
-              activeTab === 'subscription'
+            onClick={() => setActiveTab('orders')}
+            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              activeTab === 'orders'
                 ? 'border-emerald-700 text-emerald-800'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
             <CreditCard className="w-4 h-4" />
-            <span>Abonnement & Transactions FCFA</span>
+            <span>Commandes Moov Money ({manualOrders.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('subscription')}
+            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              activeTab === 'subscription'
+                ? 'border-emerald-700 text-emerald-800'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Mon Forfait & Droits</span>
           </button>
 
           <button
             onClick={() => setActiveTab('profile')}
-            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+            className={`pb-3 border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === 'profile'
                 ? 'border-emerald-700 text-emerald-800'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
             <User className="w-4 h-4" />
-            <span>Mon Profil & Données</span>
+            <span>Profil & Sécurité</span>
           </button>
         </div>
 
@@ -162,16 +273,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {activeTab === 'cvs' && (
           <div className="space-y-6">
             {isQuotaReached && (
-              <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 flex items-center justify-between text-xs text-amber-900">
+              <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-900">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                   <span>
-                    Vous avez atteint la limite de {planQuota} CV de votre formule actuelle.
+                    Vous avez atteint le plafond de <strong>{planQuota} CV</strong> de votre formule actuelle.
                   </span>
                 </div>
                 <button
                   onClick={() => onOpenPricing()}
-                  className="font-bold text-amber-900 bg-amber-200 hover:bg-amber-300 px-3 py-1 rounded-lg transition-colors"
+                  className="font-bold text-amber-900 bg-amber-200 hover:bg-amber-300 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
                 >
                   Augmenter mes quotas
                 </button>
@@ -187,7 +298,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </p>
                 <button
                   onClick={onCreateNewCV}
-                  className="px-5 py-2.5 bg-emerald-700 text-white rounded-xl text-xs font-bold hover:bg-emerald-800 transition-colors inline-flex items-center gap-2"
+                  className="px-5 py-2.5 bg-emerald-700 text-white rounded-xl text-xs font-bold hover:bg-emerald-800 transition-colors inline-flex items-center gap-2 cursor-pointer shadow-sm"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Créer mon premier CV</span>
@@ -201,7 +312,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   const isAccessActive = Boolean(access && access.status === 'active' && expiresTime > nowTimestamp);
                   const isAccessExpired = Boolean(access && access.expiresAt && expiresTime <= nowTimestamp);
 
-                  // Calcul du temps restant
+                  // Décompte précis
                   const remainingMs = expiresTime - nowTimestamp;
                   let remainingText = '';
                   if (isAccessActive) {
@@ -215,7 +326,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     else remainingText = `${m}m ${s}s restants`;
                   }
 
-                  // Recherche d'une commande Moov en cours pour ce CV
                   const pendingOrder = manualOrders.find(
                     (o) => o.cvId === cvItem.id && o.status === 'pending_verification'
                   );
@@ -232,7 +342,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       }`}
                     >
                       <div className="space-y-3">
-                        {/* En-tête : Modèle & Offre associée */}
+                        {/* En-tête : Modèle & Badge de droit */}
                         <div className="flex flex-wrap justify-between items-center gap-1.5">
                           <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
                             Modèle {cvItem.settings?.templateId}
@@ -270,6 +380,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               value={renameTitle}
                               onChange={(e) => setRenameTitle(e.target.value)}
                               className="text-xs p-1.5 border rounded flex-1 font-bold"
+                              autoFocus
                             />
                             <button
                               onClick={() => handleRenameSave(cvItem.id)}
@@ -354,8 +465,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           )}
 
                           {!isAccessActive && !isAccessExpired && (
-                            <div className="text-[11px] text-slate-500">
-                              <span>Export sans filigrane bloqué jusqu'au paiement approuvé.</span>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                              <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>Export sans filigrane verrouillé jusqu'à l'approbation du paiement.</span>
                             </div>
                           )}
                         </div>
@@ -382,11 +494,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                           <button
                             onClick={() => onEditCV(cvItem)}
-                            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                            title="Ouvrir l'aperçu et exporter le PDF"
+                            className={`px-3 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer ${
+                              isAccessActive
+                                ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                            }`}
+                            title={
+                              isAccessActive
+                                ? 'Ouvrir l’aperçu et exporter le PDF Pro A4 sans filigrane'
+                                : 'Ouvrir l’aperçu et exporter le PDF avec filigrane'
+                            }
                           >
                             <Download className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">PDF</span>
+                            <span className="hidden sm:inline">
+                              {isAccessActive ? 'PDF Pro' : 'PDF'}
+                            </span>
                           </button>
 
                           <button
@@ -419,8 +541,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <Sparkles className="w-3.5 h-3.5" />
                             <span>
                               {isAccessExpired
-                                ? 'Renouveler l’accès (dès 500 FCFA)'
-                                : 'Acheter un accès Premium (500 FCFA / 1000 FCFA)'}
+                                ? 'Renouveler l’accès (500 ou 1 000 FCFA)'
+                                : 'Débloquer l’export sans filigrane (Moov Money)'}
                             </span>
                           </button>
                         )}
@@ -433,88 +555,43 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         )}
 
-        {/* 2. ABONNEMENT & PAIEMENTS */}
-        {activeTab === 'subscription' && (
+        {/* 2. COMMANDES MOOV MONEY BÉNIN */}
+        {activeTab === 'orders' && (
           <div className="space-y-6">
-            {/* Statut Forfait */}
-            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
                 <div>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Votre Forfait Actuel
-                  </span>
-                  <h3 className="text-xl font-black text-slate-900 mt-1">
-                    {subscription?.planCode === 'plus_30d'
-                      ? 'Pack Carrière 30 Jours'
-                      : subscription?.planCode === 'premium_7d'
-                      ? 'Accès Candidature 7 Jours'
-                      : 'Formule Découverte Gratuite'}
+                  <h3 className="font-extrabold text-base text-slate-900">
+                    Historique de mes Commandes Moov Money Bénin
                   </h3>
-                  <div className="flex items-center gap-2 mt-2 text-xs">
-                    <span className="inline-flex items-center gap-1 text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full font-bold">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      Statut : {subscription?.status === 'active' ? 'Actif' : 'Inactif'}
-                    </span>
-                    {subscription?.expiresAt && (
-                      <span className="text-slate-500">
-                        Expire le : {new Date(subscription.expiresAt).toLocaleDateString('fr-FR')}
-                      </span>
-                    )}
-                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Chaque transfert vers le <strong>01 94 53 77 41</strong> (Waaliyou Z Labouda) est vérifié par nos équipes sous 15 minutes.
+                  </p>
                 </div>
-
                 <button
                   onClick={() => onOpenPricing()}
-                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
                 >
-                  Changer d'offre / Recharger
+                  Nouvelle commande
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-6 text-xs">
-                <div className="p-4 bg-slate-50 rounded-xl">
-                  <span className="text-slate-500 block">Quota de CV autorisés</span>
-                  <span className="text-base font-bold text-slate-900 font-mono mt-0.5 block">
-                    {cvs.length} / {planQuota} CV créés
-                  </span>
+              {manualOrders.length === 0 ? (
+                <div className="py-12 text-center text-slate-500 space-y-2">
+                  <CreditCard className="w-10 h-10 text-slate-300 mx-auto" />
+                  <p className="text-xs font-medium">Vous n'avez passé aucune commande pour le moment.</p>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-xl">
-                  <span className="text-slate-500 block">Filigrane sur les PDF</span>
-                  <span className="text-base font-bold text-slate-900 mt-0.5 block">
-                    {subscription?.planCode !== 'free' ? 'Retiré (Documents Pro)' : 'Inclus (Version gratuite)'}
-                  </span>
-                </div>
-                <div className="p-4 bg-slate-50 rounded-xl">
-                  <span className="text-slate-500 block">Assistance Rédaction IA</span>
-                  <span className="text-base font-bold text-slate-900 mt-0.5 block">
-                    {subscription?.planCode !== 'free' ? 'Illimitée' : 'Suggestions standards'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Suivi des commandes Moov Money Bénin */}
-            {manualOrders.length > 0 && (
-              <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-extrabold text-base text-slate-900">
-                    Suivi de mes Commandes Moov Money
-                  </h3>
-                  <span className="text-xs text-slate-500">
-                    Bénéficiaire : Waaliyou Z Labouda (0194537741)
-                  </span>
-                </div>
-
+              ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] border-b">
                       <tr>
-                        <th className="py-2.5 px-3">Commande</th>
+                        <th className="py-2.5 px-3">Numéro Commande</th>
                         <th className="py-2.5 px-3">Date</th>
                         <th className="py-2.5 px-3">Offre</th>
                         <th className="py-2.5 px-3">Montant</th>
-                        <th className="py-2.5 px-3">Réf Moov déclarée</th>
-                        <th className="py-2.5 px-3">Statut de vérification</th>
+                        <th className="py-2.5 px-3">Référence Moov</th>
+                        <th className="py-2.5 px-3">Statut de validation</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -524,7 +601,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             {ord.orderNumber}
                           </td>
                           <td className="py-3 px-3 text-slate-500">
-                            {new Date(ord.createdAt).toLocaleDateString('fr-FR')}
+                            {new Date(ord.createdAt).toLocaleDateString('fr-FR', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric'
+                            })}
                           </td>
                           <td className="py-3 px-3 font-semibold text-slate-800">{ord.planName}</td>
                           <td className="py-3 px-3 font-bold font-mono text-emerald-800">
@@ -532,7 +613,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </td>
                           <td className="py-3 px-3 font-mono font-bold text-blue-900">
                             {ord.submission?.transactionRef || (
-                              <span className="text-slate-400 italic font-normal">Non renseignée</span>
+                              <span className="text-slate-400 italic font-normal">En attente de saisie</span>
                             )}
                           </td>
                           <td className="py-3 px-3">
@@ -550,7 +631,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             {ord.status === 'approved' && (
                               <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-100 text-emerald-900 px-2.5 py-0.5 rounded-full">
                                 <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                Validé & Forfait Actif
+                                Approuvé • Forfait Actif
                               </span>
                             )}
                             {ord.status === 'rejected' && (
@@ -559,8 +640,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   Refusé
                                 </span>
                                 {ord.decision?.rejectionReason && (
-                                  <div className="text-[10px] text-red-700">
-                                    {ord.decision.rejectionReason}
+                                  <div className="text-[10px] text-red-700 font-medium">
+                                    Motif : {ord.decision.rejectionReason}
                                   </div>
                                 )}
                               </div>
@@ -571,17 +652,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </tbody>
                   </table>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+          </div>
+        )}
 
-            {/* Historique des transactions Mobile Money */}
+        {/* 3. MON FORFAIT & DROITS */}
+        {activeTab === 'subscription' && (
+          <div className="space-y-6">
             <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs">
-              <h3 className="font-extrabold text-base text-slate-900 mb-4">
-                Historique des Paiements Confirmés (FCFA)
-              </h3>
-              {payments.length === 0 ? (
-                <p className="text-xs text-slate-500">Aucune transaction enregistrée.</p>
-              ) : (
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
+                <div>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Formule Actuelle du Compte
+                  </span>
+                  <h3 className="text-xl font-black text-slate-900 mt-1">
+                    {subscription?.planCode === 'plus_30d' || subscription?.planCode === 'career_30d'
+                      ? 'Pack Carrière 30 Jours'
+                      : subscription?.planCode === 'premium_7d' || subscription?.planCode === 'cand_24h'
+                      ? 'Accès Candidature'
+                      : 'Formule Découverte Gratuite'}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-2 text-xs">
+                    <span className="inline-flex items-center gap-1 text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full font-bold">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Statut : {subscription?.status === 'active' ? 'Actif' : 'Inactif'}
+                    </span>
+                    {subscription?.expiresAt && (
+                      <span className="text-slate-500 font-mono">
+                        Expire le : {new Date(subscription.expiresAt).toLocaleDateString('fr-FR')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => onOpenPricing()}
+                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+                >
+                  Changer d'offre / Débloquer
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-6 text-xs">
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <span className="text-slate-500 block">Quota de CV autorisés</span>
+                  <span className="text-base font-bold text-slate-900 font-mono mt-0.5 block">
+                    {cvs.length} / {planQuota} CV
+                  </span>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <span className="text-slate-500 block">Filigrane sur les PDF</span>
+                  <span className="text-base font-bold text-slate-900 mt-0.5 block">
+                    {subscription?.planCode !== 'free' ? 'Retiré (Documents Pro)' : 'Inclus (Version gratuite)'}
+                  </span>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <span className="text-slate-500 block">Modèles professionnels</span>
+                  <span className="text-base font-bold text-emerald-800 mt-0.5 block">
+                    15 modèles débloqués
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Historique des paiements confirmés */}
+            {payments.length > 0 && (
+              <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs space-y-4">
+                <h3 className="font-extrabold text-base text-slate-900">
+                  Paiements enregistrés et archivés
+                </h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] border-b">
@@ -620,66 +760,205 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* 3. PROFIL & GESTION DES DONNÉES */}
+        {/* 4. PROFIL & SÉCURITÉ */}
         {activeTab === 'profile' && (
-          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs max-w-2xl space-y-6">
-            <h3 className="font-extrabold text-base text-slate-900">
-              Paramètres du Compte & Conformité APDP Bénin
-            </h3>
-
-            <div className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-700 font-bold mb-1">Nom complet</label>
-                <input
-                  type="text"
-                  disabled
-                  value={`${currentUser.firstName} ${currentUser.lastName}`}
-                  className="w-full p-2.5 rounded-lg border border-slate-300 bg-slate-50 text-slate-600"
-                />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Formulaire des Informations Personnelles */}
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs space-y-6">
+              <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                  <User className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-slate-900">Informations Personnelles</h3>
+                  <p className="text-xs text-slate-500">Mettez à jour vos coordonnées de contact</p>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-slate-700 font-bold mb-1">Adresse e-mail de connexion</label>
-                <input
-                  type="email"
-                  disabled
-                  value={currentUser.email}
-                  className="w-full p-2.5 rounded-lg border border-slate-300 bg-slate-50 text-slate-600"
-                />
-              </div>
+              {profileMessage && (
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                    profileMessage.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                      : 'bg-red-50 text-red-800 border border-red-200'
+                  }`}
+                >
+                  {profileMessage.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                  )}
+                  <span>{profileMessage.text}</span>
+                </div>
+              )}
 
-              <div>
-                <label className="block text-slate-700 font-bold mb-1">Téléphone mobile (+229)</label>
-                <input
-                  type="text"
-                  disabled
-                  value={currentUser.phoneNumber || '+229 97 00 00 00'}
-                  className="w-full p-2.5 rounded-lg border border-slate-300 bg-slate-50 text-slate-600"
-                />
-              </div>
+              <form onSubmit={handleSaveProfile} className="space-y-4 text-xs">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Prénom</label>
+                    <input
+                      type="text"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      required
+                      className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Nom</label>
+                    <input
+                      type="text"
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      required
+                      className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Adresse Email (Identifiant)</span>
+                  </label>
+                  <input
+                    type="email"
+                    disabled
+                    value={currentUser.email}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"
+                  />
+                  <span className="text-[11px] text-slate-400 mt-1 block">
+                    L'adresse email sert d'identifiant unique et ne peut être modifiée.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Téléphone Mobile (+229 Bénin)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    placeholder="+229 97 00 00 00"
+                    className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={profileSaving}
+                    className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold transition-colors cursor-pointer shadow-sm"
+                  >
+                    {profileSaving ? 'Enregistrement...' : 'Enregistrer les modifications'}
+                  </button>
+                </div>
+              </form>
             </div>
 
-            <div className="pt-6 border-t border-slate-200 space-y-3">
-              <h4 className="font-bold text-red-600 text-xs">Zone de confidentialité avancée</h4>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Conformément au Code du Numérique du Bénin, vous pouvez demander l'effacement définitif de toutes vos données et CV archivés.
-              </p>
-              <button
-                onClick={() => {
-                  if (confirm('Êtes-vous sûr de vouloir supprimer tous vos CV enregistrés ?')) {
-                    cvs.forEach((c) => storageService.deleteCV(c.id));
-                    onRefreshData();
-                  }
-                }}
-                className="px-4 py-2 border border-red-300 text-red-600 hover:bg-red-50 rounded-xl text-xs font-bold transition-colors"
-              >
-                Purger mes CV enregistrés
-              </button>
+            {/* Formulaire de Sécurité & Mot de Passe */}
+            <div className="space-y-8">
+              <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-2xs space-y-6">
+                <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+                  <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-800 flex items-center justify-center font-bold">
+                    <KeyRound className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-base text-slate-900">Mot de Passe & Sécurité</h3>
+                    <p className="text-xs text-slate-500">Sécurisez l'accès à vos CV et historiques</p>
+                  </div>
+                </div>
+
+                {passwordMessage && (
+                  <div
+                    className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                      passwordMessage.type === 'success'
+                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        : 'bg-red-50 text-red-800 border border-red-200'
+                    }`}
+                  >
+                    {passwordMessage.type === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>{passwordMessage.text}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleChangePassword} className="space-y-4 text-xs">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Mot de passe actuel</label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      required
+                      placeholder="••••••••"
+                      className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Nouveau mot de passe (min 8 car.)</label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                      placeholder="••••••••"
+                      className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Confirmer le nouveau mot de passe</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      placeholder="••••••••"
+                      className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="submit"
+                      disabled={passwordSaving}
+                      className="w-full py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl font-bold transition-colors cursor-pointer shadow-sm"
+                    >
+                      {passwordSaving ? 'Vérification...' : 'Mettre à jour le mot de passe'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Zone Danger APDP Bénin */}
+              <div className="bg-red-50/50 rounded-3xl p-6 sm:p-8 border border-red-200 space-y-4">
+                <div className="flex items-center gap-2 text-red-900">
+                  <Shield className="w-4 h-4 text-red-600" />
+                  <h4 className="font-extrabold text-sm">Droit à l'effacement • Conformité APDP Bénin</h4>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  En vertu du Code du Numérique de la République du Bénin, vous pouvez supprimer définitivement votre compte, tous vos CV archivés et vos déclarations de commande.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setDeleteAccountModalOpen(true)}
+                  className="px-4 py-2 bg-white text-red-600 border border-red-300 hover:bg-red-600 hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                >
+                  Supprimer définitivement mon compte
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -701,15 +980,65 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="flex gap-2 pt-2">
               <button
                 onClick={() => setDeleteModalCVId(null)}
-                className="flex-1 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+                className="flex-1 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
               >
                 Annuler
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="flex-1 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors"
+                className="flex-1 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors cursor-pointer"
               >
                 Confirmer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODALE DE SUPPRESSION DE COMPTE (APDP BÉNIN) */}
+      {deleteAccountModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl border border-red-200 space-y-5">
+            <div className="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-2">
+              <h4 className="font-black text-slate-900 text-lg">Supprimer votre compte ?</h4>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Cette action est <strong>irréversible</strong>. Tous vos CV ({cvs.length}), historiques de commandes et données personnelles seront immédiatement et définitivement purgés des serveurs.
+              </p>
+              <p className="text-xs text-slate-700 font-bold pt-2">
+                Pour confirmer, tapez <span className="text-red-600 font-mono">SUPPRIMER</span> ci-dessous :
+              </p>
+            </div>
+
+            <input
+              type="text"
+              value={deleteAccountConfirmText}
+              onChange={(e) => setDeleteAccountConfirmText(e.target.value)}
+              placeholder="SUPPRIMER"
+              className="w-full p-2.5 rounded-xl border border-slate-300 text-center font-mono font-bold text-xs uppercase focus:ring-2 focus:ring-red-600 focus:outline-hidden"
+            />
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteAccountModalOpen(false);
+                  setDeleteAccountConfirmText('');
+                }}
+                disabled={deleteAccountLoading}
+                className="flex-1 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAccount}
+                disabled={deleteAccountConfirmText !== 'SUPPRIMER' || deleteAccountLoading}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer"
+              >
+                {deleteAccountLoading ? 'Suppression...' : 'Confirmer la suppression'}
               </button>
             </div>
           </div>

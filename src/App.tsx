@@ -23,8 +23,44 @@ import { CVBuilder } from './components/builder/CVBuilder';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { AdminPanel } from './components/admin/AdminPanel';
 
+const GUEST_USER_FALLBACK: UserProfile = {
+  id: 'guest_user',
+  email: 'candidat@cvprobenin.bj',
+  firstName: 'Candidat',
+  lastName: 'Bénin',
+  countryCode: 'BJ',
+  role: 'user',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z'
+};
+
+const getTabFromPath = (path: string): string => {
+  if (path === '/admin') return 'admin';
+  if (path === '/mon-compte') return 'dashboard';
+  if (path === '/builder') return 'builder';
+  if (path === '/templates') return 'templates';
+  if (path === '/tarifs' || path === '/pricing') return 'pricing';
+  if (path === '/conseils') return 'tips';
+  return 'home';
+};
+
+const getPathFromTab = (tab: string): string => {
+  if (tab === 'admin') return '/admin';
+  if (tab === 'dashboard') return '/mon-compte';
+  if (tab === 'builder') return '/builder';
+  if (tab === 'templates') return '/templates';
+  if (tab === 'pricing') return '/tarifs';
+  if (tab === 'tips') return '/conseils';
+  return '/';
+};
+
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<string>('home');
+  const [currentTab, setCurrentTab] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return getTabFromPath(window.location.pathname);
+    }
+    return 'home';
+  });
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => storageService.getCurrentUser());
   const [plans, setPlans] = useState<Plan[]>(() => storageService.getPlans());
   const [cvs, setCvs] = useState<CVData[]>(() => storageService.getCVs(currentUser?.id));
@@ -51,6 +87,29 @@ export default function App() {
     refreshData();
   }, [currentTab]);
 
+  useEffect(() => {
+    const handlePopState = () => {
+      const poppedTab = getTabFromPath(window.location.pathname);
+      setCurrentTab(poppedTab);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleNavigate = (tab: string) => {
+    if (tab === 'import') {
+      setImportModalOpen(true);
+      return;
+    }
+    setCurrentTab(tab);
+    const targetPath = getPathFromTab(tab);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ tab }, '', targetPath);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleSelectTemplateAndBuild = (templateId: string) => {
     const updatedCV = {
       ...activeCV,
@@ -61,7 +120,7 @@ export default function App() {
     };
     setActiveCV(updatedCV);
     storageService.saveCV(updatedCV);
-    setCurrentTab('builder');
+    handleNavigate('builder');
   };
 
   const handleCreateNewCV = () => {
@@ -76,12 +135,12 @@ export default function App() {
     storageService.saveCV(newCV);
     setActiveCV(newCV);
     refreshData();
-    setCurrentTab('builder');
+    handleNavigate('builder');
   };
 
   const handleEditCV = (cvToEdit: CVData) => {
     setActiveCV(cvToEdit);
-    setCurrentTab('builder');
+    handleNavigate('builder');
   };
 
   const handleCVImported = (importedCV: CVData) => {
@@ -92,13 +151,13 @@ export default function App() {
     setActiveCV(importedCV);
     setImportModalOpen(false);
     refreshData();
-    setCurrentTab('builder');
+    handleNavigate('builder');
   };
 
   const handleLogout = () => {
     storageService.setCurrentUser(null);
     setCurrentUser(null);
-    setCurrentTab('home');
+    handleNavigate('home');
     refreshData();
   };
 
@@ -112,14 +171,7 @@ export default function App() {
       {currentTab !== 'admin' && (
         <Navbar
           currentTab={currentTab}
-          onNavigate={(tab) => {
-            if (tab === 'import') {
-              setImportModalOpen(true);
-            } else {
-              setCurrentTab(tab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-          }}
+          onNavigate={handleNavigate}
           currentUser={currentUser}
           onLogout={handleLogout}
           onOpenAuth={() => setAuthModalOpen(true)}
@@ -229,12 +281,50 @@ export default function App() {
               setSelectedPlanForPayment(plans[1] || plans[0]);
             }}
             onRefreshData={refreshData}
+            onLogout={handleLogout}
           />
+        )}
+
+        {/* 6b. ACCÈS MON-COMPTE SANS ÊTRE CONNECTÉ */}
+        {currentTab === 'dashboard' && !currentUser && (
+          <div className="min-h-[70vh] flex items-center justify-center p-4 bg-slate-50">
+            <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-slate-200 shadow-xl text-center space-y-6">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto shadow-sm">
+                <span className="text-2xl font-black">BJ</span>
+              </div>
+              <div className="space-y-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                  Espace Personnel Candidat
+                </span>
+                <h2 className="text-xl font-black text-slate-900">
+                  Connectez-vous à votre compte
+                </h2>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Pour retrouver vos CV enregistrés, suivre vos validations Moov Money et gérer votre forfait, veuillez vous connecter ou créer un compte gratuit.
+                </p>
+              </div>
+
+              <div className="space-y-2.5 pt-2">
+                <button
+                  onClick={() => setAuthModalOpen(true)}
+                  className="w-full py-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-700/20 transition-all cursor-pointer"
+                >
+                  Se connecter / Créer un compte
+                </button>
+                <button
+                  onClick={() => handleNavigate('home')}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Retour à l'accueil
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* 7. CONSOLE D'ADMINISTRATION */}
         {currentTab === 'admin' && (
-          <AdminPanel onBack={() => setCurrentTab('home')} />
+          <AdminPanel onBack={() => handleNavigate('home')} />
         )}
       </div>
 
@@ -242,14 +332,8 @@ export default function App() {
       {currentTab !== 'admin' && (
         <Footer
           onOpenLegal={(topic) => setLegalTopic(topic)}
-          onNavigate={(tab) => {
-            if (tab === 'import') {
-              setImportModalOpen(true);
-            } else {
-              setCurrentTab(tab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-          }}
+          onNavigate={handleNavigate}
+          onOpenAuth={() => setAuthModalOpen(true)}
         />
       )}
 
@@ -273,18 +357,7 @@ export default function App() {
         <PaymentModal
           plan={selectedPlanForPayment}
           targetCV={activeCV}
-          currentUser={
-            currentUser || {
-              id: 'guest_user',
-              email: 'candidat@cvprobenin.bj',
-              firstName: 'Candidat',
-              lastName: 'Bénin',
-              countryCode: 'BJ',
-              role: 'user',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            }
-          }
+          currentUser={currentUser || GUEST_USER_FALLBACK}
           onClose={() => {
             setSelectedPlanForPayment(null);
             refreshData();

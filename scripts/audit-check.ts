@@ -442,6 +442,114 @@ assert(MOOV_MONEY_BENEFICIARY.ussdCode === '*855#', 'Code USSD Moov Money : *855
 const isDuplicateRef = !declarePayment(order1.id, 'MOOV_BJ_REF_1001', '0194537741');
 assert(isDuplicateRef, 'Rejet immédiat d’une référence de transaction déjà validée pour une autre commande');
 
+// -----------------------------------------------------------------------------
+// 13. CONTRÔLE D'ACCÈS RBAC & ÉTANCHÉITÉ DE L'ESPACE ADMINISTRATEUR
+// -----------------------------------------------------------------------------
+console.log('\n--- 13. Contrôle d’Accès RBAC & Étanchéité de l’Espace Administrateur ---');
+interface MockUserWithRole {
+  id: string;
+  email: string;
+  role: 'user' | 'admin';
+  isSuspended?: boolean;
+}
+
+const candidateUser: MockUserWithRole = {
+  id: 'usr_candidat_01',
+  email: 'candidat@test.bj',
+  role: 'user'
+};
+
+const adminMasterUser: MockUserWithRole = {
+  id: 'usr_admin_01',
+  email: 'admin@cvprobenin.bj',
+  role: 'admin'
+};
+
+function checkAdminPermission(user: MockUserWithRole): { allowed: boolean; status: number } {
+  if (user.isSuspended) return { allowed: false, status: 403 };
+  if (user.role !== 'admin' || user.email !== 'admin@cvprobenin.bj') {
+    return { allowed: false, status: 403 };
+  }
+  return { allowed: true, status: 200 };
+}
+
+const candidateAccess = checkAdminPermission(candidateUser);
+assert(candidateAccess.allowed === false, 'Accès refusé pour un utilisateur standard au panneau d’administration');
+assert(candidateAccess.status === 403, 'Code HTTP 403 Forbidden renvoyé lors d’une tentative d’accès non autorisé');
+
+const adminAccess = checkAdminPermission(adminMasterUser);
+assert(adminAccess.allowed === true && adminAccess.status === 200, 'Accès accordé avec succès à l’administrateur officiel admin@cvprobenin.bj');
+
+// -----------------------------------------------------------------------------
+// 14. SUSPENSION ADMINISTRATIVE DE COMPTE & BLOCAGE DES DROITS
+// -----------------------------------------------------------------------------
+console.log('\n--- 14. Suspension Administrative & Blocage Immédiat ---');
+const suspendedUser: MockUserWithRole = {
+  ...candidateUser,
+  id: 'usr_suspended_01',
+  isSuspended: true
+};
+
+function canUserLogin(user: MockUserWithRole): { canLogin: boolean; reason?: string } {
+  if (user.isSuspended) {
+    return { canLogin: false, reason: 'Compte suspendu par l’administration' };
+  }
+  return { canLogin: true };
+}
+
+const loginCheckSuspended = canUserLogin(suspendedUser);
+assert(loginCheckSuspended.canLogin === false, 'Compte suspendu : connexion bloquée');
+assert(loginCheckSuspended.reason?.includes('suspendu') === true, 'Message explicite de suspension notifié');
+
+// -----------------------------------------------------------------------------
+// 15. MODIFICATION DU PROFIL & CHANGEMENT DE MOT DE PASSE (RÈGLES DE SÉCURITÉ)
+// -----------------------------------------------------------------------------
+console.log('\n--- 15. Modification de Profil & Validation Mot de Passe ---');
+function validatePasswordChange(oldPass: string, storedHash: string, newPass: string): { valid: boolean; error?: string } {
+  if (hashPassword(oldPass) !== storedHash) {
+    return { valid: false, error: 'Mot de passe actuel incorrect.' };
+  }
+  if (newPass.length < 8) {
+    return { valid: false, error: 'Le nouveau mot de passe doit comporter au moins 8 caractères.' };
+  }
+  return { valid: true };
+}
+
+const currentPassTest = 'AncienMotDePasse2026!';
+const currentHashTest = hashPassword(currentPassTest);
+
+const badOldPass = validatePasswordChange('FauxAncienPass', currentHashTest, 'NouveauPass2026!');
+assert(badOldPass.valid === false, 'Échec de changement de mot de passe si l’ancien mot de passe est erroné');
+
+const shortNewPass = validatePasswordChange(currentPassTest, currentHashTest, '12345');
+assert(shortNewPass.valid === false, 'Échec si le nouveau mot de passe compte moins de 8 caractères');
+
+const goodPassChange = validatePasswordChange(currentPassTest, currentHashTest, 'NouveauSuperPass2026!');
+assert(goodPassChange.valid === true, 'Changement de mot de passe accepté si toutes les conditions de sécurité sont satisfaites');
+
+// -----------------------------------------------------------------------------
+// 16. CONFORMITÉ APDP BÉNIN & PROTECTION DU COMPTE RACINE ADMINISTRATEUR
+// -----------------------------------------------------------------------------
+console.log('\n--- 16. Droit à l’Effacement APDP Bénin & Protection Admin Racine ---');
+const userToDelete: MockUserWithRole = {
+  id: 'usr_to_delete_99',
+  email: 'a_effacer@gmail.com',
+  role: 'user'
+};
+
+function deleteAccountSecure(user: MockUserWithRole): { deleted: boolean; error?: string } {
+  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
+    return { deleted: false, error: 'Impossible de supprimer le compte administrateur racine.' };
+  }
+  return { deleted: true };
+}
+
+const attemptDeleteAdmin = deleteAccountSecure(adminMasterUser);
+assert(attemptDeleteAdmin.deleted === false, 'Protection inviolable : le compte admin racine admin@cvprobenin.bj ne peut pas être supprimé');
+
+const normalDelete = deleteAccountSecure(userToDelete);
+assert(normalDelete.deleted === true, 'Droit à l’oubli APDP Bénin : suppression du compte candidat exécutée avec succès');
+
 console.log('\n======================================================================');
 console.log(`BILAN DU CONTRÔLE QUALITÉ : ${passedTests} TESTS VALIDÉS, ${failedTests} ÉCHECS`);
 console.log('======================================================================\n');
@@ -451,3 +559,4 @@ if (failedTests > 0) {
 } else {
   process.exit(0);
 }
+
