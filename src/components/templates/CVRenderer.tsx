@@ -23,6 +23,7 @@ import {
   Sparkles,
   UserCheck
 } from 'lucide-react';
+import { CVInteractiveLink } from '../common/CVInteractiveLink';
 
 interface CVRendererProps {
   cv: CVData;
@@ -48,21 +49,50 @@ export const CVRenderer: React.FC<CVRendererProps> = ({
       ? 'font-sans tracking-tight'
       : 'font-sans';
 
+  // Dimensions exactes d'une feuille A4 standard (210mm x 297mm = 794px x 1123px à 96 DPI)
+  const a4Width = 794;
+  const a4Height = 1123;
+  const scaledWidth = Math.round(a4Width * scale);
+  const scaledHeight = Math.round(a4Height * scale);
+
+  // Fallbacks gracieux si les informations sont partiellement saisies
+  const displayFirstName = personalInfo.firstName?.trim() || (personalInfo.lastName ? '' : 'Prénom');
+  const displayLastName = personalInfo.lastName?.trim() || (personalInfo.firstName ? '' : 'NOM');
+  const displayJobTitle = personalInfo.jobTitle?.trim() || 'Titre du poste visé';
+
+  const safeCV: CVData = {
+    ...cv,
+    personalInfo: {
+      ...personalInfo,
+      firstName: displayFirstName,
+      lastName: displayLastName,
+      jobTitle: displayJobTitle
+    }
+  };
+
   return (
     <div
-      className="relative transition-transform origin-top flex justify-center print:m-0 print:p-0"
-      style={{ transform: `scale(${scale})` }}
+      className="relative flex justify-center print:m-0 print:p-0 select-text transition-all duration-150 mx-auto"
+      style={{
+        width: `${scaledWidth}px`,
+        minHeight: `${scaledHeight}px`,
+        maxWidth: '100%'
+      }}
     >
       {/* Conteneur A4 standardisé (210mm x 297mm) */}
       <div
         id="cv-document-preview"
-        className={`w-[210mm] min-h-[297mm] bg-white text-slate-900 shadow-2xl print:shadow-none print:w-full print:min-h-0 print:h-auto overflow-visible relative ${fontClass} leading-relaxed rounded-sm`}
+        className={`bg-white text-slate-900 shadow-xl print:shadow-none print:w-full print:min-h-0 print:h-auto relative ${fontClass} leading-relaxed rounded-xs`}
         style={{
+          width: `${a4Width}px`,
+          minHeight: `${a4Height}px`,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
           boxSizing: 'border-box'
         }}
       >
         {/* Rendu spécifique et distinct de chacun des 15 modèles */}
-        {renderTemplateContent(templateId, cv, primaryColor)}
+        {renderTemplateContent(templateId, safeCV, primaryColor)}
 
         {/* Filigrane discret si offre gratuite */}
         {showWatermark && (
@@ -148,13 +178,21 @@ function ModerneDynamique({ cv, color }: { cv: CVData; color: string }) {
             {personalInfo.phone && (
               <div className="flex items-center gap-2">
                 <Phone className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                <span>{personalInfo.phone}</span>
+                <CVInteractiveLink type="phone" value={personalInfo.phone} />
+              </div>
+            )}
+            {personalInfo.phone && (
+              <div className="flex items-center gap-2 text-[11px] opacity-90">
+                <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center font-bold text-[8px] bg-emerald-500 text-white rounded-full">WA</span>
+                <CVInteractiveLink type="whatsapp" value={personalInfo.phone}>
+                  WhatsApp direct
+                </CVInteractiveLink>
               </div>
             )}
             {personalInfo.email && (
               <div className="flex items-center gap-2 break-all">
                 <Mail className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                <span>{personalInfo.email}</span>
+                <CVInteractiveLink type="email" value={personalInfo.email} />
               </div>
             )}
             {(personalInfo.city || personalInfo.country) && (
@@ -169,13 +207,13 @@ function ModerneDynamique({ cv, color }: { cv: CVData; color: string }) {
             {personalInfo.linkedIn && (
               <div className="flex items-center gap-2 break-all text-[11px]">
                 <Linkedin className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                <span>{personalInfo.linkedIn.replace(/^https?:\/\//, '')}</span>
+                <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} />
               </div>
             )}
             {personalInfo.website && (
               <div className="flex items-center gap-2 break-all text-[11px]">
                 <Globe className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                <span>{personalInfo.website.replace(/^https?:\/\//, '')}</span>
+                <CVInteractiveLink type="url" value={personalInfo.website} />
               </div>
             )}
           </div>
@@ -348,11 +386,29 @@ function ClassiqueInstitutionnel({ cv, color }: { cv: CVData; color: string }) {
         <p className="text-sm font-bold tracking-widest uppercase mt-1" style={{ color }}>
           {personalInfo.jobTitle || 'Candidat'}
         </p>
-        <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-slate-600 mt-2 font-medium">
-          {personalInfo.phone && <span>{personalInfo.phone}</span>}
-          {personalInfo.email && <span>• {personalInfo.email}</span>}
+        <div className="flex flex-wrap justify-center items-center gap-x-4 gap-y-1 text-xs text-slate-600 mt-2 font-medium">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+          {personalInfo.phone && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700">WhatsApp</CVInteractiveLink>
+            </span>
+          )}
+          {personalInfo.email && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="email" value={personalInfo.email} />
+            </span>
+          )}
           {personalInfo.city && <span>• {personalInfo.city}, Bénin</span>}
-          {personalInfo.linkedIn && <span>• {personalInfo.linkedIn.replace(/^https?:\/\//, '')}</span>}
+          {personalInfo.linkedIn && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} />
+            </span>
+          )}
+          {personalInfo.website && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="url" value={personalInfo.website} />
+            </span>
+          )}
         </div>
       </div>
 
@@ -474,10 +530,29 @@ function MinimalisteEpure({ cv, color }: { cv: CVData; color: string }) {
           {personalInfo.firstName} <span className="font-extrabold">{personalInfo.lastName}</span>
         </h1>
         <p className="text-sm font-semibold text-slate-600 mt-1 uppercase tracking-wide">{personalInfo.jobTitle}</p>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 mt-3 font-medium">
-          <span>{personalInfo.email}</span>
-          <span>• {personalInfo.phone}</span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 mt-3 font-medium">
+          {personalInfo.email && <CVInteractiveLink type="email" value={personalInfo.email} />}
+          {personalInfo.phone && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="phone" value={personalInfo.phone} />
+            </span>
+          )}
+          {personalInfo.phone && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-600 font-semibold">WhatsApp</CVInteractiveLink>
+            </span>
+          )}
           <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+          {personalInfo.linkedIn && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} />
+            </span>
+          )}
+          {personalInfo.website && (
+            <span className="inline-flex items-center gap-1">
+              • <CVInteractiveLink type="url" value={personalInfo.website} />
+            </span>
+          )}
         </div>
       </div>
 
@@ -573,10 +648,21 @@ function PremierEmploiTremplin({ cv, color }: { cv: CVData; color: string }) {
         <div>
           <h1 className="text-3xl font-black tracking-tight">{personalInfo.firstName} {personalInfo.lastName}</h1>
           <p className="text-sm font-bold uppercase tracking-wider opacity-90 mt-1">{personalInfo.jobTitle}</p>
-          <div className="flex flex-wrap gap-3 text-xs opacity-80 mt-2">
-            <span>{personalInfo.phone}</span>
-            <span>• {personalInfo.email}</span>
+          <div className="flex flex-wrap items-center gap-3 text-xs opacity-80 mt-2">
+            {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+            {personalInfo.phone && (
+              <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="underline decoration-white/40 font-medium">WhatsApp</CVInteractiveLink></span>
+            )}
+            {personalInfo.email && (
+              <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
+            )}
             <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+            {personalInfo.linkedIn && (
+              <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+            )}
+            {personalInfo.website && (
+              <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
+            )}
           </div>
         </div>
         {personalInfo.photoUrl && (
@@ -659,10 +745,18 @@ function EtudiantStageAcademique({ cv, color }: { cv: CVData; color: string }) {
       <div className="border-b-4 pb-4 mb-6" style={{ borderColor: color }}>
         <h1 className="text-2xl font-black uppercase text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-extrabold uppercase tracking-widest mt-0.5" style={{ color }}>{personalInfo.jobTitle}</p>
-        <div className="text-xs text-slate-500 mt-2 flex flex-wrap gap-3">
-          <span>{personalInfo.phone}</span>
-          <span>• {personalInfo.email}</span>
-          <span>• Cotonou / Abomey-Calavi (UAC)</span>
+        <div className="text-xs text-slate-500 mt-2 flex flex-wrap items-center gap-3">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-semibold">WhatsApp</CVInteractiveLink></span>
+          )}
+          {personalInfo.email && (
+            <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
+          )}
+          <span>• {personalInfo.city || 'Cotonou / Abomey-Calavi (UAC)'}</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
         </div>
       </div>
 
@@ -743,10 +837,20 @@ function TechDeveloper({ cv, color }: { cv: CVData; color: string }) {
           </div>
           <h1 className="text-2xl font-black font-mono tracking-tight text-white">{personalInfo.firstName} {personalInfo.lastName}</h1>
           <p className="text-xs text-slate-300 font-medium mt-0.5">{personalInfo.jobTitle}</p>
-          <div className="flex flex-wrap gap-3 text-xs text-slate-400 mt-2 font-mono">
-            <span>{personalInfo.email}</span>
-            <span>{personalInfo.phone}</span>
-            {personalInfo.website && <span className="text-emerald-400">{personalInfo.website}</span>}
+          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-2 font-mono">
+            {personalInfo.email && <CVInteractiveLink type="email" value={personalInfo.email} className="text-slate-300" />}
+            {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} className="text-slate-300" />}
+            {personalInfo.phone && (
+              <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-400 font-bold">
+                [WA_DIRECT]
+              </CVInteractiveLink>
+            )}
+            {personalInfo.linkedIn && (
+              <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} className="text-sky-400" />
+            )}
+            {personalInfo.website && (
+              <CVInteractiveLink type="url" value={personalInfo.website} className="text-emerald-400" />
+            )}
           </div>
         </div>
       </div>
@@ -823,10 +927,18 @@ function CommercialVente({ cv, color }: { cv: CVData; color: string }) {
       <div className="p-8 text-white" style={{ backgroundColor: color }}>
         <h1 className="text-3xl font-black tracking-tight uppercase">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-extrabold tracking-widest uppercase mt-1 opacity-90">{personalInfo.jobTitle}</p>
-        <div className="flex flex-wrap gap-4 text-xs mt-3 opacity-80">
-          <span>{personalInfo.phone}</span>
-          <span>{personalInfo.email}</span>
-          <span>{personalInfo.city || 'Cotonou'}, Bénin</span>
+        <div className="flex flex-wrap items-center gap-4 text-xs mt-3 opacity-90">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="underline font-semibold">WhatsApp</CVInteractiveLink></span>
+          )}
+          {personalInfo.email && (
+            <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
+          )}
+          <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
         </div>
       </div>
 
@@ -906,10 +1018,12 @@ function ComptabiliteFinance({ cv, color }: { cv: CVData; color: string }) {
             </h1>
             <p className="text-xs font-bold uppercase tracking-widest text-teal-800 mt-1">{personalInfo.jobTitle}</p>
           </div>
-          <div className="text-right text-xs text-slate-600">
-            <div>{personalInfo.phone}</div>
-            <div>{personalInfo.email}</div>
+          <div className="text-right text-xs text-slate-600 space-y-0.5">
+            {personalInfo.phone && <div><CVInteractiveLink type="phone" value={personalInfo.phone} /></div>}
+            {personalInfo.phone && <div><CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-medium">WhatsApp direct</CVInteractiveLink></div>}
+            {personalInfo.email && <div><CVInteractiveLink type="email" value={personalInfo.email} /></div>}
             <div>{personalInfo.city || 'Cotonou'}, Bénin</div>
+            {personalInfo.linkedIn && <div><CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></div>}
           </div>
         </div>
       </div>
@@ -986,10 +1100,18 @@ function EnseignantAcademique({ cv, color }: { cv: CVData; color: string }) {
       <div className="border-b-2 pb-4 mb-6 text-center" style={{ borderColor: color }}>
         <h1 className="text-2xl font-serif font-black tracking-wide uppercase text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest mt-1" style={{ color }}>{personalInfo.jobTitle}</p>
-        <div className="text-xs text-slate-600 mt-2 flex justify-center gap-4">
-          <span>{personalInfo.phone}</span>
-          <span>{personalInfo.email}</span>
-          <span>{personalInfo.city || 'Cotonou'}, Bénin</span>
+        <div className="text-xs text-slate-600 mt-2 flex flex-wrap justify-center items-center gap-4">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700">WhatsApp</CVInteractiveLink></span>
+          )}
+          {personalInfo.email && (
+            <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
+          )}
+          <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
         </div>
       </div>
 
@@ -1051,10 +1173,18 @@ function ExecutiveManagement({ cv, color }: { cv: CVData; color: string }) {
       <div className="bg-slate-900 text-white p-8">
         <h1 className="text-3xl font-black uppercase tracking-tight">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest mt-1 text-slate-300">{personalInfo.jobTitle}</p>
-        <div className="flex gap-4 text-xs text-slate-400 mt-3">
-          <span>{personalInfo.phone}</span>
-          <span>{personalInfo.email}</span>
-          <span>{personalInfo.city || 'Cotonou'}, Bénin</span>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400 mt-3">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} className="text-slate-300" />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-400 font-medium">WhatsApp</CVInteractiveLink></span>
+          )}
+          {personalInfo.email && (
+            <span>• <CVInteractiveLink type="email" value={personalInfo.email} className="text-slate-300" /></span>
+          )}
+          <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} className="text-slate-300" /></span>
+          )}
         </div>
       </div>
 
@@ -1127,10 +1257,21 @@ function InternationalATS({ cv, color }: { cv: CVData; color: string }) {
       <div className="border-b pb-4 mb-6">
         <h1 className="text-2xl font-black uppercase tracking-tight text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest text-slate-700 mt-0.5">{personalInfo.jobTitle}</p>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 mt-2">
-          <span>{personalInfo.email}</span>
-          <span>{personalInfo.phone}</span>
-          <span>{personalInfo.city || 'Cotonou'}, Bénin</span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 mt-2">
+          {personalInfo.email && <CVInteractiveLink type="email" value={personalInfo.email} />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="phone" value={personalInfo.phone} /></span>
+          )}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-semibold">WhatsApp</CVInteractiveLink></span>
+          )}
+          <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
+          )}
         </div>
       </div>
 
@@ -1203,10 +1344,18 @@ function StagePerfectionnement({ cv, color }: { cv: CVData; color: string }) {
       <div className="p-6 rounded-2xl text-white mb-6" style={{ backgroundColor: color }}>
         <h1 className="text-2xl font-black">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest mt-1 opacity-90">{personalInfo.jobTitle || 'Candidat au stage'}</p>
-        <div className="text-xs opacity-80 mt-2 flex gap-3">
-          <span>{personalInfo.phone}</span>
-          <span>• {personalInfo.email}</span>
+        <div className="text-xs opacity-80 mt-2 flex flex-wrap items-center gap-3">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="underline font-medium">WhatsApp</CVInteractiveLink></span>
+          )}
+          {personalInfo.email && (
+            <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
+          )}
           <span>• Disponible immédiatement au Bénin</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
         </div>
       </div>
 
@@ -1301,9 +1450,10 @@ function TechnicienOperations({ cv, color }: { cv: CVData; color: string }) {
           <div>
             <h3 className="text-xs font-bold uppercase mb-2" style={{ color }}>Contact</h3>
             <div className="text-xs text-slate-700 space-y-1">
-              <div>{personalInfo.phone}</div>
-              <div className="break-all">{personalInfo.email}</div>
-              <div>{personalInfo.city}, Bénin</div>
+              {personalInfo.phone && <div><CVInteractiveLink type="phone" value={personalInfo.phone} /></div>}
+              {personalInfo.phone && <div><CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-medium">WhatsApp direct</CVInteractiveLink></div>}
+              {personalInfo.email && <div className="break-all"><CVInteractiveLink type="email" value={personalInfo.email} /></div>}
+              <div>{personalInfo.city || 'Cotonou'}, Bénin</div>
             </div>
           </div>
 
@@ -1361,9 +1511,11 @@ function SecretariatAdministration({ cv, color }: { cv: CVData; color: string })
         <div>
           <h3 className="text-xs font-bold uppercase mb-2" style={{ color }}>Coordonnées</h3>
           <div className="text-xs text-slate-700 space-y-1">
-            <div>{personalInfo.phone}</div>
-            <div className="break-all">{personalInfo.email}</div>
-            <div>{personalInfo.city}, Bénin</div>
+            {personalInfo.phone && <div><CVInteractiveLink type="phone" value={personalInfo.phone} /></div>}
+            {personalInfo.phone && <div><CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-medium">WhatsApp direct</CVInteractiveLink></div>}
+            {personalInfo.email && <div className="break-all"><CVInteractiveLink type="email" value={personalInfo.email} /></div>}
+            <div>{personalInfo.city || 'Cotonou'}, Bénin</div>
+            {personalInfo.linkedIn && <div><CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></div>}
           </div>
         </div>
 
@@ -1395,10 +1547,21 @@ function ProfessionnelChronologique({ cv, color }: { cv: CVData; color: string }
       <div className="border-b-4 pb-4 mb-6" style={{ borderColor: color }}>
         <h1 className="text-3xl font-black uppercase text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-sm font-bold uppercase tracking-wider mt-1 text-slate-700">{personalInfo.jobTitle}</p>
-        <div className="flex flex-wrap gap-4 text-xs text-slate-600 mt-2">
-          <span>{personalInfo.phone}</span>
-          <span>{personalInfo.email}</span>
-          <span>{personalInfo.city || 'Cotonou'}, Bénin</span>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600 mt-2">
+          {personalInfo.phone && <CVInteractiveLink type="phone" value={personalInfo.phone} />}
+          {personalInfo.phone && (
+            <span>• <CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-medium">WhatsApp</CVInteractiveLink></span>
+          )}
+          {personalInfo.email && (
+            <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
+          )}
+          <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
+          {personalInfo.linkedIn && (
+            <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
+          )}
         </div>
       </div>
 

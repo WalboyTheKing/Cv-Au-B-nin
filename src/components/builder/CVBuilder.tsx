@@ -753,8 +753,8 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
           </div>
 
           {/* Rendu dynamique du CV dans son conteneur A4 réaliste */}
-          <div className="w-full flex flex-col items-center pb-16">
-            <div className="relative">
+          <div className="w-full flex flex-col items-center justify-center pb-16">
+            <div className="relative shadow-xl rounded-sm">
               <CVRenderer
                 cv={cv}
                 scale={previewScale}
@@ -763,9 +763,9 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
 
               {/* Ligne de démarcation de pagination A4 à 297mm */}
               <div
-                className="pointer-events-none absolute left-0 right-0 border-b-2 border-dashed border-red-400/60 z-20"
+                className="pointer-events-none absolute left-0 right-0 border-b-2 border-dashed border-red-400/70 z-20"
                 style={{
-                  top: `${297 * 3.7795275591 * previewScale}px`
+                  top: `${1123 * previewScale}px`
                 }}
               >
                 <span className="absolute -top-3 right-4 bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.5 rounded shadow-2xs border border-red-200">

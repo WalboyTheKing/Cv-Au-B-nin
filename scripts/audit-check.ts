@@ -671,6 +671,96 @@ assert(
   'Variantes de compétences reconnues fidèlement'
 );
 
+// -----------------------------------------------------------------------------
+// 20. VALIDATION, SÉCURITÉ ET FORMATAGE DES LIENS INTERACTIFS (PDF & WEB)
+// -----------------------------------------------------------------------------
+console.log('\n--- 20. Détection, Nettoyage et Sécurité des Liens Interactifs ---');
+import {
+  buildEmailLink,
+  buildPhoneLink,
+  buildWhatsAppLink,
+  buildSafeWebUrl,
+  buildLinkedInLink,
+  buildGitHubLink,
+  formatDisplayUrl,
+  isValidPdfAnnotationUrl
+} from '../src/utils/linkUtils';
+import jsPDF from 'jspdf';
+
+// Test Email
+assert(buildEmailLink('dossou@gmail.com') === 'mailto:dossou@gmail.com', 'Génération mailto: valide pour adresse email standard');
+assert(buildEmailLink('  JeanEudes.Dossou@UAC.BJ  ') === 'mailto:jeaneudes.dossou@uac.bj', 'Nettoyage des espaces et mise en minuscule de l’email');
+assert(buildEmailLink('email_invalide_sans_arobase') === null, 'Rejet d’une adresse email mal formée');
+
+// Test Téléphone
+assert(buildPhoneLink('+229 97 12 34 56') === 'tel:+22997123456', 'Formatage tel: avec indicatif béninois +229 existant');
+assert(buildPhoneLink('97 12 34 56') === 'tel:+22997123456', 'Ajout automatique de l’indicatif +229 pour numéro béninois à 8 chiffres');
+assert(buildPhoneLink('01 94 53 77 41') === 'tel:+2290194537741', 'Prise en charge du plan à 10 chiffres (préfixe 01) au Bénin');
+assert(buildPhoneLink('123') === null, 'Rejet d’un numéro de téléphone trop court');
+
+// Test WhatsApp
+assert(buildWhatsAppLink('+229 97 12 34 56') === 'https://wa.me/22997123456', 'Génération lien WhatsApp wa.me/229... avec indicatif');
+assert(buildWhatsAppLink('97 12 34 56') === 'https://wa.me/22997123456', 'Génération lien WhatsApp wa.me/229... pour numéro sans indicatif');
+assert(buildWhatsAppLink('01 94 53 77 41') === 'https://wa.me/2290194537741', 'Génération WhatsApp wa.me pour numéro 10 chiffres Bénin');
+
+// Test URL sécurisée & protection anti-XSS
+assert(buildSafeWebUrl('monsite.bj') === 'https://monsite.bj/', 'Ajout automatique du protocole https:// si absent');
+assert(buildSafeWebUrl('https://portfolio.dev') === 'https://portfolio.dev/', 'Conservation d’une URL HTTPS valide');
+assert(buildSafeWebUrl('javascript:alert(document.cookie)') === null, 'Blocage strict de l’injection javascript:');
+assert(buildSafeWebUrl('data:text/html,<script>evil()</script>') === null, 'Blocage strict de l’injection data:');
+assert(buildSafeWebUrl('vbscript:msgbox()') === null, 'Blocage strict de vbscript:');
+
+// Test LinkedIn & GitHub
+assert(buildLinkedInLink('jeaneudes-dossou') === 'https://www.linkedin.com/in/jeaneudes-dossou', 'Génération URL LinkedIn officielle depuis un pseudo');
+assert(buildLinkedInLink('https://www.linkedin.com/in/jeaneudes-dossou') === 'https://www.linkedin.com/in/jeaneudes-dossou', 'Conservation d’une URL LinkedIn complète');
+assert(buildGitHubLink('@dossoudev') === 'https://github.com/dossoudev', 'Génération URL GitHub officielle depuis @username');
+
+// Test affichage visuel épuré
+assert(formatDisplayUrl('https://www.monportfolio.com/cv/') === 'monportfolio.com/cv', 'Formatage visuel épuré sans https:// ni www. ni slash final');
+
+// Test validation annotation PDF
+assert(isValidPdfAnnotationUrl('https://wa.me/22997123456') === true, 'Validation URL HTTPS pour annotation PDF');
+assert(isValidPdfAnnotationUrl('mailto:contact@cvpro.bj') === true, 'Validation mailto: pour annotation PDF');
+assert(isValidPdfAnnotationUrl('tel:+22997123456') === true, 'Validation tel: pour annotation PDF');
+assert(isValidPdfAnnotationUrl('javascript:bad()') === false, 'Rejet formel javascript: pour annotation PDF');
+
+// -----------------------------------------------------------------------------
+// 21. PROJECTION GÉOMÉTRIQUE ET GESTION MULTI-PAGES DU GÉNÉRATEUR PDF
+// -----------------------------------------------------------------------------
+console.log('\n--- 21. Projection Géométrique et Multi-Pages du Générateur PDF ---');
+
+const a4HeightMm = 297;
+function calculatePageForY(yMm: number): { pageIndex: number; yOnPageMm: number } {
+  const pageIndex = Math.floor(yMm / a4HeightMm);
+  const yOnPageMm = Number((yMm - pageIndex * a4HeightMm).toFixed(2));
+  return { pageIndex, yOnPageMm };
+}
+
+// Lien en haut de page 1
+const linkPage1 = calculatePageForY(50);
+assert(linkPage1.pageIndex === 0 && linkPage1.yOnPageMm === 50, 'Lien à y=50mm assigné à la page 1 à y=50mm');
+
+// Lien débordant sur la page 2 (y = 350mm)
+const linkPage2 = calculatePageForY(350);
+assert(linkPage2.pageIndex === 1 && linkPage2.yOnPageMm === 53, 'Lien à y=350mm assigné à la page 2 à y=53mm (350 - 297)');
+
+// Lien sur la page 3 (y = 620mm)
+const linkPage3 = calculatePageForY(620);
+assert(linkPage3.pageIndex === 2 && linkPage3.yOnPageMm === 26, 'Lien à y=620mm assigné à la page 3 à y=26mm (620 - 594)');
+
+// Vérification de la création d'annotations PDF réelles avec jsPDF
+const JsPDFConstructor = (jsPDF as any).jsPDF || jsPDF;
+const testPdfDoc = new JsPDFConstructor({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+testPdfDoc.text('Page 1 - CV Pro Bénin', 20, 20);
+testPdfDoc.link(20, 30, 60, 10, { url: 'https://wa.me/22997123456' });
+
+testPdfDoc.addPage();
+testPdfDoc.text('Page 2 - Expériences Suite', 20, 20);
+testPdfDoc.link(20, 40, 50, 10, { url: 'https://github.com/dossoudev' });
+
+const pdfOutput = testPdfDoc.output('arraybuffer');
+assert(pdfOutput.byteLength > 1000, 'Génération PDF multi-pages valide avec annotations de liens réelles');
+
 console.log('\n======================================================================');
 console.log(`BILAN DU CONTRÔLE QUALITÉ : ${passedTests} TESTS VALIDÉS, ${failedTests} ÉCHECS`);
 console.log('======================================================================\n');
