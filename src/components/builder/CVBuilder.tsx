@@ -246,6 +246,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
       const filename = `${cv.personalInfo.lastName || 'Candidat'}_${cv.personalInfo.firstName || 'CV'}.pdf`.replace(/\s+/g, '_');
       await generateCVPdf('cv-document-preview', {
         filename,
+        cvData: cv,
         hasWatermark: !hasActiveAccess,
         watermarkText: 'Créé avec CV Pro Bénin — Version Découverte',
         onProgress: (p) => setExportProgress(p)

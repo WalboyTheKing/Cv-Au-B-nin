@@ -12,6 +12,7 @@ import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
+import Tesseract from 'tesseract.js';
 
 dotenv.config();
 
@@ -189,7 +190,14 @@ let aiClient: GoogleGenAI | null = null;
 function getAiClient(): GoogleGenAI | null {
   if (!aiClient && process.env.GEMINI_API_KEY) {
     try {
-      aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      aiClient = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
     } catch (e) {
       console.error('Erreur initialisation Gemini API serveur', e);
     }
@@ -197,7 +205,7 @@ function getAiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-function callWithTimeout<T>(promiseFn: () => Promise<T>, timeoutMs = 10000): Promise<T> {
+function callWithTimeout<T>(promiseFn: () => Promise<T>, timeoutMs = 35000): Promise<T> {
   return Promise.race([
     promiseFn(),
     new Promise<T>((_, reject) =>
@@ -1470,6 +1478,76 @@ Renvoie directement le texte reformulé.`;
   }
 });
 
+// Fonctions utilitaires d'extraction et d'OCR pour PDF matriciels / scannés
+function extractJpegsFromPdf(buffer: Buffer): Buffer[] {
+  const images: Buffer[] = [];
+  let pos = 0;
+  while (pos < buffer.length) {
+    const start = buffer.indexOf(Buffer.from([0xFF, 0xD8, 0xFF]), pos);
+    if (start === -1) break;
+    const end = buffer.indexOf(Buffer.from([0xFF, 0xD9]), start + 3);
+    if (end === -1) break;
+    images.push(buffer.subarray(start, end + 2));
+    pos = end + 2;
+  }
+  return images;
+}
+
+function getJpegDimensions(buf: Buffer): { width: number; height: number } | null {
+  let i = 0;
+  while (i < buf.length - 8) {
+    if (buf[i] === 0xFF && (buf[i + 1] === 0xC0 || buf[i + 1] === 0xC2)) {
+      const height = buf.readUInt16BE(i + 5);
+      const width = buf.readUInt16BE(i + 7);
+      return { width, height };
+    }
+    i++;
+  }
+  return null;
+}
+
+async function runOcrOnPdfBuffer(pdfBuffer: Buffer): Promise<string> {
+  const images = extractJpegsFromPdf(pdfBuffer);
+  if (images.length === 0) return '';
+
+  let ocrWorker: any = null;
+  try {
+    ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
+    let combinedText = '';
+
+    for (const img of images) {
+      const dims = getJpegDimensions(img);
+      if (dims && dims.width > 800) {
+        // Découpage bi-colonne pour préserver la distinction entre la colonne latérale et le corps principal
+        const sidebarWidth = Math.round(dims.width * 0.35);
+        const mainWidth = dims.width - sidebarWidth;
+
+        const resRight = await ocrWorker.recognize(img, {
+          rectangle: { top: 0, left: sidebarWidth, width: mainWidth, height: dims.height }
+        });
+        const resLeft = await ocrWorker.recognize(img, {
+          rectangle: { top: 0, left: 0, width: sidebarWidth, height: dims.height }
+        });
+
+        combinedText += '\n\n' + (resRight.data?.text || '') + '\n\n' + (resLeft.data?.text || '');
+      } else {
+        const res = await ocrWorker.recognize(img);
+        combinedText += '\n\n' + (res.data?.text || '');
+      }
+    }
+    return combinedText.trim();
+  } catch (ocrErr) {
+    console.warn('[Server Tesseract OCR Error]', ocrErr);
+    return '';
+  } finally {
+    if (ocrWorker) {
+      try {
+        await ocrWorker.terminate();
+      } catch (e) {}
+    }
+  }
+}
+
 // 3. Extraction textuelle propre de document (PDF, DOCX, TXT)
 app.post('/api/cv/extract-text', async (req, res) => {
   try {
@@ -1497,6 +1575,16 @@ app.post('/api/cv/extract-text', async (req, res) => {
         }
       } catch (pdfErr) {
         console.warn('[PDFParse Server Warning]', pdfErr);
+      }
+
+      // Si le PDF est un document image-only ou matriciel (aucune couche vectorielle de texte)
+      const isMinimalOrPageNumberOnly = !extractedText || extractedText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(extractedText.replace(/\s+/g, ' ').trim());
+      if (isMinimalOrPageNumberOnly) {
+        console.log('[Server] Document PDF matriciel / image détecté, lancement OCR Tesseract...');
+        const ocrText = await runOcrOnPdfBuffer(buffer);
+        if (ocrText && ocrText.length > 20) {
+          extractedText = ocrText;
+        }
       }
     } else if (isDOCX) {
       try {
@@ -1530,13 +1618,21 @@ app.post('/api/cv/parse', async (req, res) => {
   let docText = rawText || '';
 
   // Extraction PDF propre via PDFParse côté serveur si non fournie
-  if ((!docText || docText.length < 20) && fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
+  if ((!docText || docText.length < 50) && fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
     try {
       const buffer = Buffer.from(fileBase64, 'base64');
       const parser = new PDFParse({ data: buffer });
       const result = await parser.getText();
       if (result && result.text) {
         docText = result.text.trim();
+      }
+      const isMinimalOrPageNumberOnly = !docText || docText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(docText.replace(/\s+/g, ' ').trim());
+      if (isMinimalOrPageNumberOnly) {
+        console.log('[Server] Document PDF matriciel dans /api/cv/parse, lancement OCR Tesseract...');
+        const ocrText = await runOcrOnPdfBuffer(buffer);
+        if (ocrText && ocrText.length > 20) {
+          docText = ocrText;
+        }
       }
     } catch (pErr) {
       console.warn('[Server PDFParse during parse error]', pErr);
@@ -1666,7 +1762,11 @@ Format JSON attendu :
     }
 
     let contents: any[] = [];
-    if (fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
+    if (docText && docText.length >= 30) {
+      contents = [
+        { text: `${systemPrompt}\n\nVoici le contenu textuel extrait du document de CV à analyser fidèlement :\n\n${docText}` }
+      ];
+    } else if (fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
       contents = [
         {
           inlineData: {
@@ -1697,7 +1797,7 @@ Format JSON attendu :
                 responseMimeType: 'application/json'
               }
             }),
-          10000
+          30000
         );
         if (response.text) {
           parsedJson = JSON.parse(response.text.trim());
@@ -1709,19 +1809,28 @@ Format JSON attendu :
       }
     }
 
-    if (!parsedJson && lastErr) {
-      throw lastErr;
+    if (!parsedJson) {
+      console.warn('[Gemini API CV Parse] Bascule immédiate vers le moteur heuristique avec le texte extrait:', lastErr?.message || 'Pas de JSON');
+      return res.json({
+        success: true,
+        isAI: false,
+        rawText: docText,
+        message: 'Extraction textuelle directe effectuée avec succès.'
+      });
     }
 
     res.json({
       success: true,
-      data: parsedJson || {}
+      data: parsedJson || {},
+      rawText: docText
     });
   } catch (err: any) {
-    console.error('Erreur extraction CV IA:', err);
-    res.status(500).json({
-      success: false,
-      error: err?.message || "Erreur lors de l'analyse du document par l'IA."
+    console.error('Erreur extraction CV IA, repli heuristique automatique:', err);
+    res.json({
+      success: true,
+      isAI: false,
+      rawText: docText,
+      message: 'Extraction textuelle directe effectuée avec succès.'
     });
   }
 });

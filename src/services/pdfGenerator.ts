@@ -7,10 +7,13 @@ import html2canvas from 'html2canvas-pro';
 import jsPDF from 'jspdf';
 import { isValidPdfAnnotationUrl } from '../utils/linkUtils';
 
+import { CVData } from '../types';
+
 export interface PDFExportOptions {
   filename?: string;
   hasWatermark?: boolean;
   watermarkText?: string;
+  cvData?: CVData;
   onProgress?: (progress: number) => void;
 }
 
@@ -90,6 +93,7 @@ export async function generateCVPdf(
     filename = 'Mon_CV_Professionnel.pdf',
     hasWatermark = false,
     watermarkText = 'CV Pro Bénin — Version Découverte',
+    cvData,
     onProgress
   } = options;
 
@@ -139,6 +143,25 @@ export async function generateCVPdf(
     unit: 'mm',
     format: 'a4'
   });
+
+  // Intégration transparente et non altérante des métadonnées du CV pour une réimportation à 100%
+  if (cvData) {
+    try {
+      const jsonStr = JSON.stringify(cvData);
+      const b64 = typeof window !== 'undefined' && window.btoa
+        ? window.btoa(unescape(encodeURIComponent(jsonStr)))
+        : Buffer.from(jsonStr, 'utf-8').toString('base64');
+
+      pdf.setProperties({
+        title: cvData.title || filename,
+        subject: 'CV_PRO_BENIN_DATA',
+        author: `${cvData.personalInfo?.firstName || ''} ${cvData.personalInfo?.lastName || ''}`.trim() || 'CV Pro Bénin',
+        keywords: `CVPRO_B64:${b64}`
+      });
+    } catch (metaErr) {
+      console.warn('Impossible d’intégrer les métadonnées CV au PDF:', metaErr);
+    }
+  }
 
   // Calcul du ratio de proportion pour respecter exactement les dimensions A4
   const imgWidth = pdfWidth;
