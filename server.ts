@@ -10,9 +10,6 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
-import mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
-import Tesseract from 'tesseract.js';
 
 dotenv.config();
 
@@ -1512,6 +1509,8 @@ async function runOcrOnPdfBuffer(pdfBuffer: Buffer): Promise<string> {
 
   let ocrWorker: any = null;
   try {
+    const tesseractMod = await import('tesseract.js');
+    const Tesseract = tesseractMod.default || tesseractMod;
     ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
     let combinedText = '';
 
@@ -1568,6 +1567,7 @@ app.post('/api/cv/extract-text', async (req, res) => {
 
     if (isPDF) {
       try {
+        const { PDFParse } = await import('pdf-parse');
         const parser = new PDFParse({ data: buffer });
         const result = await parser.getText();
         if (result && result.text) {
@@ -1588,6 +1588,8 @@ app.post('/api/cv/extract-text', async (req, res) => {
       }
     } else if (isDOCX) {
       try {
+        const mammothMod = await import('mammoth');
+        const mammoth = mammothMod.default || mammothMod;
         const docResult = await mammoth.extractRawText({ buffer });
         if (docResult && docResult.value) {
           extractedText = docResult.value.trim();
@@ -1621,10 +1623,15 @@ app.post('/api/cv/parse', async (req, res) => {
   if ((!docText || docText.length < 50) && fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
     try {
       const buffer = Buffer.from(fileBase64, 'base64');
-      const parser = new PDFParse({ data: buffer });
-      const result = await parser.getText();
-      if (result && result.text) {
-        docText = result.text.trim();
+      try {
+        const { PDFParse } = await import('pdf-parse');
+        const parser = new PDFParse({ data: buffer });
+        const result = await parser.getText();
+        if (result && result.text) {
+          docText = result.text.trim();
+        }
+      } catch (pdfErr) {
+        console.warn('[Server PDFParse during parse warning]', pdfErr);
       }
       const isMinimalOrPageNumberOnly = !docText || docText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(docText.replace(/\s+/g, ' ').trim());
       if (isMinimalOrPageNumberOnly) {
@@ -1640,6 +1647,8 @@ app.post('/api/cv/parse', async (req, res) => {
   } else if ((!docText || docText.length < 20) && fileBase64 && (fileName?.toLowerCase().endsWith('.docx') || fileName?.toLowerCase().endsWith('.doc'))) {
     try {
       const buffer = Buffer.from(fileBase64, 'base64');
+      const mammothMod = await import('mammoth');
+      const mammoth = mammothMod.default || mammothMod;
       const docResult = await mammoth.extractRawText({ buffer });
       if (docResult.value) {
         docText = docResult.value.trim();
@@ -1748,10 +1757,11 @@ Format JSON attendu :
   "hobbies": ["string"]
 }`;
 
-    let docText = rawText || '';
     if (!docText && fileBase64 && (fileName?.toLowerCase().endsWith('.docx') || fileName?.toLowerCase().endsWith('.doc'))) {
       try {
         const buffer = Buffer.from(fileBase64, 'base64');
+        const mammothMod = await import('mammoth');
+        const mammoth = mammothMod.default || mammothMod;
         const docResult = await mammoth.extractRawText({ buffer });
         if (docResult.value) {
           docText = docResult.value;
