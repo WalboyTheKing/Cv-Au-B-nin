@@ -244,6 +244,71 @@ export function isCVAccessActive(cv?: CVData | null): boolean {
   return new Date(cv.access.expiresAt).getTime() > Date.now();
 }
 
+export interface CVPermissions {
+  canCreateCV: boolean;
+  canEditCV: boolean;
+  canDownloadPDF: boolean;
+  canDownloadCleanPDF: boolean;
+  canUsePremiumFeatures: boolean;
+  remainingSeconds: number;
+  reason: string;
+}
+
+export function getCVPermissions(
+  cv?: CVData | null,
+  user?: UserProfile | null,
+  userCVCount = 0,
+  plans?: Plan[]
+): CVPermissions {
+  if (user?.isSuspended) {
+    return {
+      canCreateCV: false,
+      canEditCV: false,
+      canDownloadPDF: false,
+      canDownloadCleanPDF: false,
+      canUsePremiumFeatures: false,
+      remainingSeconds: 0,
+      reason: 'Compte suspendu par l’administration.'
+    };
+  }
+
+  const now = Date.now();
+  const cvExpiresMs = cv?.access?.expiresAt ? new Date(cv.access.expiresAt).getTime() : 0;
+  const cvActive = Boolean(cv?.access?.status === 'active' && cvExpiresMs > now);
+
+  const subExpiresMs = user?.subscription?.expiresAt ? new Date(user.subscription.expiresAt).getTime() : 0;
+  const subPaidActive = Boolean(
+    user?.subscription?.status === 'active' &&
+      subExpiresMs > now &&
+      user.subscription.planCode !== 'free'
+  );
+
+  const currentPlan = plans?.find((p) => p.code === (user?.subscription?.planCode || 'free'));
+  const maxCVs = currentPlan?.quotas?.maxCVs ?? (subPaidActive ? 15 : 5);
+
+  const canCreateCV = userCVCount < maxCVs;
+  const canDownloadCleanPDF = cvActive || subPaidActive;
+  const remainingSeconds = cvActive
+    ? Math.max(0, Math.floor((cvExpiresMs - now) / 1000))
+    : subPaidActive
+    ? Math.max(0, Math.floor((subExpiresMs - now) / 1000))
+    : 0;
+
+  return {
+    canCreateCV,
+    canEditCV: true, // Les CV ne sont jamais supprimés ni verrouillés à l'édition après expiration
+    canDownloadPDF: true, // Export découverte avec filigrane toujours accessible
+    canDownloadCleanPDF,
+    canUsePremiumFeatures: canDownloadCleanPDF,
+    remainingSeconds,
+    reason: canDownloadCleanPDF
+      ? 'Accès premium actif : export PDF sans filigrane autorisé.'
+      : cv?.access?.expiresAt && cvExpiresMs <= now
+      ? 'Accès expiré : vos données et l’édition restent conservées, l’export comporte un filigrane.'
+      : 'Formule Découverte : édition conservée, export PDF avec filigrane.'
+  };
+}
+
 export interface AuditLog {
   id: string;
   actorId: string;

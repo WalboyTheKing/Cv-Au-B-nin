@@ -134,6 +134,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // --- SÉCURITÉ ADMINISTRATEUR ---
   const isAdmin = currentUser?.role === 'admin' && currentUser?.email === 'admin@cvprobenin.bj';
+  const hasServerToken =
+    typeof window !== 'undefined' && Boolean(localStorage.getItem('cv_benin_auth_token'));
+
+  const getAdminAuthHeaders = (withJson = true): Record<string, string> => {
+    const token =
+      typeof window !== 'undefined' ? localStorage.getItem('cv_benin_auth_token') : null;
+    const headers: Record<string, string> = {};
+    if (withJson) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  };
 
   const handleAdminLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,38 +162,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         body: JSON.stringify({ email: adminEmailInput.trim(), password: adminPasswordInput })
       });
       const data = await res.json();
-      if (data.success && data.user) {
+      if (res.ok && data.success && data.user && data.token) {
         if (data.user.role !== 'admin') {
           setAdminLoginError('Ce compte ne dispose pas des privilèges administrateur.');
-          setIsAdminLoggingIn(false);
           return;
         }
         storageService.setCurrentUser(data.user);
-        if (data.token) {
-          localStorage.setItem('cv_benin_auth_token', data.token);
-        }
+        localStorage.setItem('cv_benin_auth_token', data.token);
+        setForceShowLoginForm(false);
+        setAdminPasswordInput('');
         onLoginSuccess?.(data.user);
         reloadData();
         return;
-      } else {
-        setAdminLoginError(data.error || 'Identifiants administrateur incorrects.');
       }
-    } catch (err) {
-      // Repli local
-      if (adminEmailInput.trim() === 'admin@cvprobenin.bj' && (adminPasswordInput === 'AdminBenin2026!' || adminPasswordInput === 'admin')) {
-        storageService.setCurrentUser(INITIAL_ADMIN);
-        onLoginSuccess?.(INITIAL_ADMIN);
-        reloadData();
-        return;
-      }
-      setAdminLoginError('Identifiants administrateur non valides.');
+      setAdminLoginError(data.error || 'Identifiants administrateur incorrects.');
+    } catch {
+      setAdminLoginError("Impossible de joindre le serveur d'authentification administrateur.");
     } finally {
       setIsAdminLoggingIn(false);
     }
   };
 
-  // 1. Si aucun utilisateur n'est connecté ou si forçage de connexion admin : Affichage de la page de connexion dédiée Admin
-  if (!currentUser || forceShowLoginForm) {
+  // 1. Si aucun utilisateur n'est connecté, forçage de connexion, ou jeton serveur manquant : Page de connexion Admin
+  if (!currentUser || forceShowLoginForm || (isAdmin && !hasServerToken)) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 selection:bg-amber-500/30 selection:text-amber-200">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
@@ -354,29 +360,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     try {
-      await fetch('/api/admin/orders/approve', {
+      const apiRes = await fetch('/api/admin/orders/approve', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({
           orderId: orderToApprove.id,
-          adminId: 'admin_master',
-          adminEmail: 'admin@cvprobenin.bj',
+          adminId: currentUser.id,
+          adminEmail: currentUser.email,
           checkAccount: true,
           checkAmount: true
         })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          setModalError(errData.error || 'Session administrateur expirée. Veuillez vous reconnecter.');
+          setForceShowLoginForm(true);
+          return;
+        }
+        setModalError(errData.error || 'La validation a été refusée par le serveur.');
+        return;
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour approbation, synchronisation locale', e);
     }
 
     const res = storageService.approveManualOrder(
       orderToApprove.id,
-      'admin_master',
-      'admin@cvprobenin.bj'
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj'
     );
 
     if (res.success) {
@@ -400,28 +412,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     try {
-      await fetch('/api/admin/orders/reject', {
+      const apiRes = await fetch('/api/admin/orders/reject', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({
           orderId: orderToReject.id,
-          adminId: 'admin_master',
-          adminEmail: 'admin@cvprobenin.bj',
+          adminId: currentUser.id,
+          adminEmail: currentUser.email,
           reason: rejectionReason.trim()
         })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          setModalError(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+        setModalError(errData.error || 'Le rejet a été refusé par le serveur.');
+        return;
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour rejet, synchronisation locale', e);
     }
 
     const res = storageService.rejectManualOrder(
       orderToReject.id,
-      'admin_master',
-      'admin@cvprobenin.bj',
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj',
       rejectionReason.trim()
     );
 
@@ -441,20 +459,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const reason = suspensionReason.trim() || 'Activité suspecte ou non conforme';
 
     try {
-      await fetch('/api/admin/users/suspend', {
+      const apiRes = await fetch('/api/admin/users/suspend', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({ userId: userToSuspend.id, reason })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          showNotification(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour suspension', e);
     }
 
-    storageService.suspendUser(userToSuspend.id, 'admin_master', 'admin@cvprobenin.bj', reason);
+    storageService.suspendUser(
+      userToSuspend.id,
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj',
+      reason
+    );
     showNotification(`Compte ${userToSuspend.email} suspendu avec succès.`);
     setUserToSuspend(null);
     setSuspensionReason('');
@@ -463,20 +490,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleReactivateUser = async (user: UserProfile) => {
     try {
-      await fetch('/api/admin/users/reactivate', {
+      const apiRes = await fetch('/api/admin/users/reactivate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({ userId: user.id })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          showNotification(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour réactivation', e);
     }
 
-    storageService.reactivateUser(user.id, 'admin_master', 'admin@cvprobenin.bj');
+    storageService.reactivateUser(
+      user.id,
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj'
+    );
     showNotification(`Compte ${user.email} réactivé.`);
     reloadData();
   };
@@ -484,20 +519,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleDeleteUserSubmit = async () => {
     if (!userToDelete) return;
     try {
-      await fetch('/api/admin/users/delete', {
+      const apiRes = await fetch('/api/admin/users/delete', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({ userId: userToDelete.id })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          showNotification(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour suppression utilisateur', e);
     }
 
-    storageService.deleteUserAdmin(userToDelete.id, 'admin_master', 'admin@cvprobenin.bj');
+    storageService.deleteUserAdmin(
+      userToDelete.id,
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj'
+    );
     showNotification(`Compte ${userToDelete.email} supprimé définitivement.`);
     setUserToDelete(null);
     setSelectedUserForDetail(null);
@@ -507,13 +550,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleSaveEditUser = async () => {
     if (!userToEdit) return;
     try {
-      await fetch('/api/admin/users/update', {
+      const apiRes = await fetch('/api/admin/users/update', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({
           userId: userToEdit.id,
           firstName: editFirstName,
@@ -521,6 +560,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           phoneNumber: editPhone
         })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          showNotification(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour mise à jour utilisateur', e);
     }
@@ -528,8 +575,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     storageService.updateUserProfileAdmin(
       userToEdit.id,
       { firstName: editFirstName, lastName: editLastName, phoneNumber: editPhone },
-      'admin_master',
-      'admin@cvprobenin.bj'
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj'
     );
     showNotification(`Informations de ${userToEdit.email} mises à jour.`);
     setUserToEdit(null);
@@ -539,19 +586,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // --- ATTRIBUTION MANUELLE DE FORFAIT ---
   const handleGrantSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalError(null);
     if (!grantReason.trim()) {
       setModalError('Un motif de dérogation ou d’attribution est obligatoire.');
       return;
     }
 
     try {
-      await fetch('/api/admin/subscriptions/grant', {
+      const apiRes = await fetch('/api/admin/subscriptions/grant', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        },
+        headers: getAdminAuthHeaders(true),
         body: JSON.stringify({
           userId: grantUserId || undefined,
           cvId: grantCVId || undefined,
@@ -559,6 +603,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           reason: grantReason.trim()
         })
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          setModalError(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+        setModalError(errData.error || "Erreur serveur lors de l'attribution.");
+        return;
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour attribution', e);
     }
@@ -567,8 +621,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       grantUserId || 'guest_user',
       grantPlanCode,
       grantReason.trim(),
-      'admin_master',
-      'admin@cvprobenin.bj',
+      currentUser.id || 'admin_master',
+      currentUser.email || 'admin@cvprobenin.bj',
       grantCVId || undefined
     );
 
@@ -584,21 +638,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleDeleteCVConfirm = async () => {
     if (!cvToDelete) return;
     try {
-      await fetch(`/api/admin/cvs/${cvToDelete.id}`, {
+      const apiRes = await fetch(`/api/admin/cvs/${encodeURIComponent(cvToDelete.id)}`, {
         method: 'DELETE',
-        headers: {
-          'x-admin-email': 'admin@cvprobenin.bj',
-          'x-admin-id': 'admin_master'
-        }
+        headers: getAdminAuthHeaders(false)
       });
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          showNotification(errData.error || 'Session administrateur expirée.');
+          setForceShowLoginForm(true);
+          return;
+        }
+      }
     } catch (e) {
       console.warn('Serveur non joignable pour suppression CV', e);
     }
 
     storageService.deleteCV(cvToDelete.id);
     storageService.addAuditLog({
-      actorId: 'admin_master',
-      actorEmail: 'admin@cvprobenin.bj',
+      actorId: currentUser.id || 'admin_master',
+      actorEmail: currentUser.email || 'admin@cvprobenin.bj',
       action: `Suppression administrative du CV ${cvToDelete.id} (${cvToDelete.title})`,
       resourceType: 'cv',
       resourceId: cvToDelete.id

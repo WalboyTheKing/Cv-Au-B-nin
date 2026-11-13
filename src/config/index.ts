@@ -60,14 +60,14 @@ export const INITIAL_PLANS: Plan[] = [
     code: 'free',
     priceXOF: 0,
     durationDays: 365,
-    description: 'Concevez votre CV gratuitement. Les exports comportent un filigrane standard.',
+    description: 'Concevez et modifiez jusqu’à 5 CV gratuitement en permanence. Les exports PDF comportent un filigrane.',
     features: [
-      'Création et modification de votre CV',
+      'Création et modification de 5 CV maximum',
       'Sauvegarde automatique dans votre compte',
-      'Accès aux modèles essentiels',
+      'Accès aux modèles essentiels et ATS',
       'Prévisualisation haute fidélité A4 en temps réel',
       'Export PDF avec filigrane standard',
-      'Données conservées en permanence'
+      'Données conservées en permanence (jamais supprimées)'
     ],
     quotas: {
       maxCVs: 5,
@@ -85,17 +85,17 @@ export const INITIAL_PLANS: Plan[] = [
     priceXOF: 500,
     durationDays: 1,
     durationHours: 24,
-    description: '500 FCFA pour un CV — 24 heures d’accès aux modifications premium et aux exports sans filigrane dès approbation.',
+    description: '500 FCFA pour 1 CV précis — 24 heures d’accès (calculées côté serveur) aux 15 modèles, IA et exports PDF sans filigrane.',
     features: [
-      'Valable pour 1 CV spécifique choisi',
-      '24 heures complètes d’accès dès validation',
+      'Valable 24h pour 1 CV spécifique choisi',
+      'Délai de 24 heures calculé côté serveur dès approbation',
       'Téléchargement PDF haute résolution sans filigrane',
-      'Accès illimité aux 15 modèles professionnels & modernes',
-      'Modifications premium en temps réel pendant 24h',
-      'Conservation intégrale du CV après expiration'
+      'Accès aux 15 modèles professionnels & compatibles ATS',
+      'Assistant IA & Analyse d’offre d’emploi pendant 24h',
+      'Conservation intégrale du CV après expiration (jusqu’à 5 CV au compte)'
     ],
     quotas: {
-      maxCVs: 1,
+      maxCVs: 5,
       allowWatermarkRemoval: true,
       allowPremiumTemplates: true,
       allowAIWriting: true,
@@ -110,17 +110,17 @@ export const INITIAL_PLANS: Plan[] = [
     priceXOF: 1000,
     durationDays: 30,
     durationHours: 720,
-    description: '1 000 FCFA pour un CV — 30 jours d’accès aux modifications premium et aux exports sans filigrane dès approbation.',
+    description: '1 000 FCFA pour 1 CV précis — 30 jours d’accès complet aux 15 modèles, IA avancée et exports PDF sans filigrane.',
     features: [
-      'Valable pour 1 CV spécifique choisi',
-      '30 jours complets d’accès dès validation',
+      'Valable 30 jours pour le CV choisi (jusqu’à 15 CV archivés)',
+      'Délai de 30 jours calculé côté serveur dès validation',
       'Téléchargements illimités de PDF sans aucun filigrane',
-      'Tous les 15 modèles professionnels & modernes',
-      'Modifications illimitées pendant toute la durée',
+      'Tous les 15 modèles professionnels & compatibles ATS',
+      'Assistant IA, score de qualité & lettre de motivation',
       'Conservation intégrale du CV et historique après 30 jours'
     ],
     quotas: {
-      maxCVs: 1,
+      maxCVs: 15,
       allowWatermarkRemoval: true,
       allowPremiumTemplates: true,
       allowAIWriting: true,

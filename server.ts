@@ -38,6 +38,7 @@ if (!fs.existsSync(DATA_DIR)) {
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 const CVS_FILE = path.join(DATA_DIR, 'cvs.json');
+const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.json');
 
 const AUTH_SALT = process.env.AUTH_SALT || 'cv_pro_benin_secure_salt_2026';
@@ -183,6 +184,25 @@ function saveOrders(orders: any[]): void {
   }
 }
 
+function loadPayments(): any[] {
+  try {
+    if (fs.existsSync(PAYMENTS_FILE)) {
+      return JSON.parse(fs.readFileSync(PAYMENTS_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Erreur lecture payments.json:', e);
+  }
+  return [];
+}
+
+function savePayments(payments: any[]): void {
+  try {
+    fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(payments, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Erreur écriture payments.json:', e);
+  }
+}
+
 // Initialisation sécurisée de Google Gen AI côté serveur (clé protégée)
 let aiClient: GoogleGenAI | null = null;
 function getAiClient(): GoogleGenAI | null {
@@ -255,33 +275,25 @@ function addServerAuditLog(
 
 function checkAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const adminEmail = (req.headers['x-admin-email'] as string) || req.body?.adminEmail;
-  const adminId = (req.headers['x-admin-id'] as string) || req.body?.adminId;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
 
-  const users = loadUsers();
-
-  // 1. Par jeton de session
-  if (token) {
-    const user = users.find((u) => u.token === token);
-    if (user && user.role === 'admin' && !user.isSuspended) {
-      (req as any).adminUser = user;
-      return next();
-    }
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentification administrateur requise (jeton Bearer manquant).'
+    });
   }
 
-  // 2. Par identifiant administrateur explicite (admin master de référence)
-  if (adminEmail === 'admin@cvprobenin.bj' || adminId === 'admin_master') {
-    const user = users.find((u) => u.email === 'admin@cvprobenin.bj' || u.id === 'admin_master');
-    if (user && user.role === 'admin' && !user.isSuspended) {
-      (req as any).adminUser = user;
-      return next();
-    }
+  const users = loadUsers();
+  const user = users.find((u) => u.token === token);
+  if (user && user.role === 'admin' && !user.isSuspended) {
+    (req as any).adminUser = user;
+    return next();
   }
 
   return res.status(403).json({
     success: false,
-    error: 'Accès administrateur refusé. Permissions insuffisantes.'
+    error: 'Accès administrateur refusé. Permissions insuffisantes ou session expirée.'
   });
 }
 
@@ -651,29 +663,32 @@ app.get('/api/cvs/:id', (req, res) => {
   res.json({ success: true, cv });
 });
 
-// Sauvegarde automatique ou création d'un CV
+// Sauvegarde automatique ou création d'un CV (le client ne peut jamais s'auto-octroyer ou prolonger access)
 app.post('/api/cvs', (req, res) => {
   const cvData = req.body;
   if (!cvData || !cvData.id) {
     return res.status(400).json({ success: false, error: 'Données de CV incomplètes (id requis).' });
   }
 
+  // Protection stricte : suppression systématique de `access` envoyé par le client
+  const { access: _ignoredClientAccess, ...safeClientCV } = cvData;
+
   const cvs = loadCVs();
   const index = cvs.findIndex((c: any) => c.id === cvData.id);
   const now = new Date().toISOString();
 
   if (index >= 0) {
-    // Conservation de l'accès payant s'il existe déjà côté serveur
+    // Seul le serveur peut accorder/prolonger `access`
     const existingAccess = cvs[index].access;
     cvs[index] = {
-      ...cvData,
-      access: cvData.access || existingAccess,
+      ...safeClientCV,
+      ...(existingAccess ? { access: existingAccess } : {}),
       updatedAt: now
     };
   } else {
     cvs.unshift({
-      ...cvData,
-      createdAt: cvData.createdAt || now,
+      ...safeClientCV,
+      createdAt: safeClientCV.createdAt || now,
       updatedAt: now
     });
   }
@@ -691,7 +706,7 @@ app.delete('/api/cvs/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// Contrôle d'éligibilité et droits d'export sans filigrane côté serveur
+// Contrôle d'éligibilité et distinction des 3 permissions (Créer, Modifier, Télécharger PDF) côté serveur
 app.get('/api/cvs/:id/entitlement', (req, res) => {
   const { id } = req.params;
   const cvs = loadCVs();
@@ -700,6 +715,10 @@ app.get('/api/cvs/:id/entitlement', (req, res) => {
   if (!cv) {
     return res.status(404).json({ success: false, error: 'CV introuvable.' });
   }
+
+  const users = loadUsers();
+  const owner = cv.userId ? users.find((u) => u.id === cv.userId) : null;
+  const userCVsCount = cv.userId ? cvs.filter((c: any) => c.userId === cv.userId).length : 1;
 
   const access = cv.access;
   const now = Date.now();
@@ -718,6 +737,9 @@ app.get('/api/cvs/:id/entitlement', (req, res) => {
     }
   }
 
+  const maxCVs = owner?.subscription?.planCode === 'career_30d' || owner?.subscription?.planCode === 'plus_30d' ? 15 : 5;
+  const isSuspended = Boolean(owner?.isSuspended);
+
   res.json({
     success: true,
     cvId: id,
@@ -727,7 +749,15 @@ app.get('/api/cvs/:id/entitlement', (req, res) => {
     planName: access?.planName || 'Formule Découverte',
     approvedAt: access?.approvedAt,
     expiresAt: access?.expiresAt,
-    remainingSeconds
+    remainingSeconds,
+    access: access || null,
+    permissions: {
+      canCreateCV: !isSuspended && userCVsCount < maxCVs,
+      canEditCV: !isSuspended,
+      canDownloadPDF: !isSuspended,
+      canDownloadCleanPDF: !isSuspended && isPremiumActive,
+      canUsePremiumFeatures: !isSuspended && isPremiumActive
+    }
   });
 });
 
@@ -754,15 +784,25 @@ app.post('/api/cvs/:id/export-check', (req, res) => {
     return res.json({
       success: true,
       allowWatermarkRemoval: false,
+      permissions: {
+        canEditCV: true,
+        canDownloadPDF: true,
+        canDownloadCleanPDF: false
+      },
       reason: access?.expiresAt && new Date(access.expiresAt).getTime() <= now
-        ? 'Accès premium expiré pour ce CV. Un renouvellement est requis.'
-        : 'CV en version brouillon non payé. Filigrane requis.'
+        ? 'Accès premium expiré pour ce CV. Vos données sont conservées mais le filigrane s’applique.'
+        : 'CV en version Découverte non payée. Filigrane requis.'
     });
   }
 
   res.json({
     success: true,
     allowWatermarkRemoval: true,
+    permissions: {
+      canEditCV: true,
+      canDownloadPDF: true,
+      canDownloadCleanPDF: true
+    },
     expiresAt: access?.expiresAt
   });
 });
@@ -771,9 +811,16 @@ app.post('/api/cvs/:id/export-check', (req, res) => {
 // ROUTES API COMMANDES & PAIEMENTS MOOV MONEY BÉNIN
 // -------------------------------------------------------------------
 
-// 4. Création d'une commande Moov Money rattachée à un CV précis
+// 4. Création d'une commande Moov Money rattachée à un utilisateur et un CV précis
 app.post('/api/orders/create', (req, res) => {
   const { orderId, orderNumber: clientOrderNumber, userId, userEmail, userName, planCode, cvId, cvTitle } = req.body;
+
+  if (!userId || !cvId) {
+    return res.status(400).json({
+      success: false,
+      error: 'La commande doit être associée à un utilisateur et à un CV précis.'
+    });
+  }
 
   const validPlans: Record<
     string,
@@ -909,6 +956,14 @@ app.get('/api/orders/user/:userId', (req, res) => {
   const orders = loadOrders();
   const userOrders = orders.filter((o) => o.userId === userId);
   res.json({ success: true, orders: userOrders });
+});
+
+// 6b. Historique archivé des paiements et activations d'un utilisateur
+app.get('/api/payments/user/:userId', (req, res) => {
+  const { userId } = req.params;
+  const payments = loadPayments();
+  const userPayments = payments.filter((p) => p.userId === userId);
+  res.json({ success: true, payments: userPayments });
 });
 
 // 7. Administration : liste de toutes les commandes
@@ -1159,6 +1214,21 @@ app.post('/api/admin/orders/approve', checkAdminAuth, (req, res) => {
     return res.status(400).json({ success: false, error: 'Cette commande a déjà été approuvée.' });
   }
 
+  // Protection anti-double validation : même référence Moov Money déjà approuvée
+  const txRef = order.submission?.transactionRef ? String(order.submission.transactionRef).trim().toUpperCase() : '';
+  if (txRef) {
+    const alreadyValidatedRef = orders.find(
+      (o) => o.id !== orderId && o.status === 'approved' && String(o.submission?.transactionRef || '').trim().toUpperCase() === txRef
+    );
+    if (alreadyValidatedRef) {
+      return res.status(400).json({
+        success: false,
+        error: `La référence Moov Money ${txRef} a déjà été validée pour la commande ${alreadyValidatedRef.orderNumber}.`
+      });
+    }
+  }
+
+  const adminActor = (req as any).adminUser;
   const is30Days = order.planCode === 'career_30d' || order.planCode === 'plus_30d';
   const durationMs = is30Days ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
 
@@ -1168,17 +1238,19 @@ app.post('/api/admin/orders/approve', checkAdminAuth, (req, res) => {
   // Mise à jour de la commande
   order.status = 'approved';
   order.decision = {
-    adminId: adminId || 'admin_master',
-    adminEmail: adminEmail || 'admin@cvprobenin.bj',
+    adminId: adminActor?.id || adminId || 'admin_master',
+    adminEmail: adminActor?.email || adminEmail || 'admin@cvprobenin.bj',
     decisionDate: nowIso
   };
   order.updatedAt = nowIso;
   saveOrders(orders);
 
-  // Mise à jour des droits spécifiques au CV cible (multi-CV strict)
+  // Mise à jour des droits spécifiques au CV cible associé à l'utilisateur (calcul strict côté serveur)
   const cvs = loadCVs();
-  let targetCV = order.cvId ? cvs.find((c: any) => c.id === order.cvId) : null;
-  if (!targetCV && order.userId) {
+  let targetCV = order.cvId
+    ? cvs.find((c: any) => c.id === order.cvId && (!c.userId || !order.userId || c.userId === order.userId))
+    : null;
+  if (!targetCV && !order.cvId && order.userId) {
     targetCV = cvs.find((c: any) => c.userId === order.userId);
   }
 
@@ -1206,10 +1278,32 @@ app.post('/api/admin/orders/approve', checkAdminAuth, (req, res) => {
     expiresAtDate = new Date(now.getTime() + durationMs);
   }
 
+  // Conservation permanente de l'historique des paiements et activations
+  const payments = loadPayments();
+  payments.unshift({
+    id: 'pay_' + Date.now(),
+    orderId: order.id,
+    orderNumber: order.orderNumber,
+    userId: order.userId,
+    cvId: order.cvId || targetCV?.id || '',
+    planId: order.planId,
+    planName: order.planName,
+    planCode: order.planCode,
+    provider: 'moov_money',
+    providerReference: txRef || order.orderNumber,
+    amountXOF: order.amountXOF,
+    currency: 'XOF',
+    status: 'confirmed',
+    confirmedAt: nowIso,
+    expiresAt: expiresAtDate.toISOString(),
+    createdAt: nowIso
+  });
+  savePayments(payments);
+
   addServerAuditLog(
-    adminId || 'admin_master',
-    adminEmail || 'admin@cvprobenin.bj',
-    `Validation du paiement commande ${order.orderNumber} (${order.amountXOF} FCFA - Moov: ${order.submission?.transactionRef || 'N/A'})`,
+    adminActor?.id || adminId || 'admin_master',
+    adminActor?.email || adminEmail || 'admin@cvprobenin.bj',
+    `Validation du paiement commande ${order.orderNumber} (${order.amountXOF} FCFA - Moov: ${txRef || 'N/A'})`,
     'order',
     order.id
   );
@@ -1415,7 +1509,7 @@ app.get('/api/config', (req, res) => {
 
 // 2. Proxy d'assistance à la rédaction IA (clé non exposée au client)
 app.post('/api/ai/enhance', async (req, res) => {
-  const { type, text, jobTitle, context } = req.body;
+  const { type, text, jobTitle, context, cvData } = req.body;
   const client = getAiClient();
 
   if (!client) {
@@ -1428,20 +1522,55 @@ app.post('/api/ai/enhance', async (req, res) => {
 
   try {
     let prompt = '';
+    const isJsonOutput = type === 'cv_audit';
+
     if (type === 'summary') {
       prompt = `Tu es un expert en recrutement au Bénin et en Afrique de l'Ouest.
 Améliore et dynamise ce résumé professionnel pour le poste de "${jobTitle || 'Professionnel'}" :
 Texte original : "${text || ''}"
 Contexte : "${context || ''}"
-Règles : N'invente aucun diplôme fictif. Rédige en français soigné, percutant et concis (3 à 5 phrases). Renvoie UNIQUEMENT le texte amélioré.`;
+Règles : N'invente aucun diplôme, expérience ou compétence fictive. Rédige en français soigné, percutant et concis (3 à 5 phrases). Renvoie UNIQUEMENT le texte amélioré.`;
     } else if (type === 'experience') {
-      prompt = `En tant qu'expert RH au Bénin, reformule cette expérience pour "${jobTitle}" avec des verbes d'action au format liste à puces :
+      prompt = `En tant qu'expert RH au Bénin, reformule cette expérience pour "${jobTitle}" avec des verbes d'action au format liste à puces sans inventer de faits fictifs :
 "${text || ''}"
 Renvoie directement le texte reformulé.`;
     } else if (type === 'grammar') {
-      prompt = `Corrige l'orthographe, la grammaire et le style professionnel de ce texte de CV en français sans en changer le sens :
+      prompt = `Corrige l'orthographe, la grammaire et le style professionnel de ce texte de CV en français sans en changer le sens ni inventer d'informations :
 "${text || ''}"
 Renvoie UNIQUEMENT le texte corrigé.`;
+    } else if (type === 'cv_audit' && cvData) {
+      prompt = `Tu es un auditeur RH expert au Bénin. Évalue objectivement ce CV sans rien inventer et renvoie EXCLUSIVEMENT un JSON valide :
+{
+  "score": number (0 à 100),
+  "strengths": ["string"],
+  "weaknesses": ["string"],
+  "recommendations": ["string"]
+}
+Données réelles du CV :
+${JSON.stringify({
+  jobTitle: cvData.personalInfo?.jobTitle,
+  summary: cvData.profileSummary,
+  experiences: cvData.experiences,
+  educations: cvData.educations,
+  skills: cvData.skills?.map((s: any) => s.name),
+  languages: cvData.languages
+})}`;
+    } else if (type === 'cover_letter' && cvData) {
+      prompt = `Tu es un conseiller carrière expert au Bénin. Rédige une lettre de motivation professionnelle en français (format sobre, 3 paragraphes + formule de politesse) en utilisant EXCLUSIVEMENT les informations réelles de ce CV (n'invente aucun diplôme, expérience ou compétence).
+${text ? `Offre d'emploi ciblée :\n${String(text).slice(0, 2500)}\n` : ''}
+CV du candidat :
+${JSON.stringify({
+  fullName: `${cvData.personalInfo?.firstName || ''} ${cvData.personalInfo?.lastName || ''}`.trim(),
+  city: cvData.personalInfo?.city,
+  phone: cvData.personalInfo?.phone,
+  email: cvData.personalInfo?.email,
+  jobTitle: cvData.personalInfo?.jobTitle,
+  summary: cvData.profileSummary,
+  experiences: cvData.experiences?.slice(0, 4),
+  educations: cvData.educations?.slice(0, 3),
+  skills: cvData.skills?.map((s: any) => s.name)
+})}
+Renvoie UNIQUEMENT le texte complet de la lettre de motivation.`;
     } else {
       prompt = `Propose 6 compétences clés recherchées au Bénin pour le métier de "${jobTitle}". Sépare par des virgules.`;
     }
@@ -1452,14 +1581,17 @@ Renvoie UNIQUEMENT le texte corrigé.`;
 
     for (const model of candidateModels) {
       try {
+        const config: any = {};
+        if (isJsonOutput) config.responseMimeType = 'application/json';
+        if (model === 'gemini-4-hydrogen') {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        }
         const response = await callWithTimeout(
           () =>
             client.models.generateContent({
               model,
               contents: prompt,
-              config: model === 'gemini-4-hydrogen'
-                ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-                : undefined
+              config: Object.keys(config).length > 0 ? config : undefined
             }),
           15000
         );
@@ -1489,6 +1621,89 @@ Renvoie UNIQUEMENT le texte corrigé.`;
       error: error?.message || 'Erreur lors de la génération assistée.'
     });
   }
+});
+
+// 2b. Analyse du CV par rapport à une offre d'emploi (sans inventer de données)
+app.post('/api/ai/job-match', async (req, res) => {
+  const { cvData, jobOfferText } = req.body || {};
+  if (!cvData || !jobOfferText || String(jobOfferText).trim().length < 20) {
+    return res.status(400).json({
+      success: false,
+      error: 'Veuillez coller le texte d’une offre d’emploi (minimum 20 caractères).'
+    });
+  }
+
+  const client = getAiClient();
+  if (!client) {
+    return res.json({
+      success: false,
+      isAI: false,
+      message: 'Clé Gemini serveur non configurée.'
+    });
+  }
+
+  const prompt = `Tu es un expert en recrutement et ATS au Bénin.
+Analyse la compatibilité entre le CV réel du candidat et l'offre d'emploi fournie.
+RÈGLE ABSOLUE : N'invente AUCUN diplôme, expérience ou compétence. Base ton analyse strictement sur les données réelles du CV. Pour "missingSkills", indique uniquement les éléments demandés par l'annonce qui ne figurent pas dans le CV (afin que le candidat ne les ajoute que s'il les maîtrise vraiment).
+Renvoie EXCLUSIVEMENT un objet JSON valide :
+{
+  "matchScore": number (0 à 100),
+  "matchingSkills": ["string"],
+  "missingSkills": ["string"],
+  "importantKeywords": ["string"],
+  "experienceTips": ["string"],
+  "recommendations": ["string"]
+}
+
+Offre d'emploi :
+${String(jobOfferText).slice(0, 4000)}
+
+CV du candidat :
+${JSON.stringify({
+  jobTitle: cvData.personalInfo?.jobTitle,
+  summary: cvData.profileSummary,
+  experiences: cvData.experiences,
+  educations: cvData.educations,
+  skills: cvData.skills?.map((s: any) => s.name),
+  languages: cvData.languages
+})}`;
+
+  const candidateModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+  for (const model of candidateModels) {
+    try {
+      const response = await callWithTimeout(
+        () =>
+          client.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+              ...(model === 'gemini-4-hydrogen'
+                ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                : {})
+            }
+          }),
+        18000
+      );
+      if (response?.text) {
+        const cleanJson = response.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const analysis = JSON.parse(cleanJson);
+        return res.json({
+          success: true,
+          isAI: true,
+          analysis
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[Gemini API Job Match] Échec sur ${model}:`, err?.message || err);
+    }
+  }
+
+  return res.json({
+    success: false,
+    isAI: false,
+    message: 'Service IA momentanément indisponible.'
+  });
 });
 
 // Fonctions utilitaires d'extraction et d'OCR pour PDF matriciels / scannés

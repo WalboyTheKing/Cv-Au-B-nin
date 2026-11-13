@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { CVData, Plan, UserProfile } from './types';
+import { CVData, getCVPermissions, Plan, UserProfile } from './types';
 import { storageService, INITIAL_DEMO_CV } from './services/storage';
 import { Navbar } from './components/common/Navbar';
 import { Footer } from './components/common/Footer';
@@ -136,7 +136,18 @@ export default function App() {
     handleNavigate('builder');
   };
 
+  const [quotaNotice, setQuotaNotice] = useState<string | null>(null);
+
   const handleCreateNewCV = () => {
+    const permissions = getCVPermissions(null, currentUser, cvs.length, plans);
+    if (!permissions.canCreateCV) {
+      setQuotaNotice(
+        `Plafond de CV atteint (${cvs.length} CV). Passez au Pack Carrière 30 Jours pour créer jusqu'à 15 CV.`
+      );
+      setSelectedPlanForPayment(plans.find((p) => p.code === 'career_30d') || plans[1] || plans[0]);
+      return;
+    }
+    setQuotaNotice(null);
     const newCV: CVData = {
       ...JSON.parse(JSON.stringify(INITIAL_DEMO_CV)),
       id: 'cv_' + Date.now(),
@@ -189,6 +200,19 @@ export default function App() {
           onLogout={handleLogout}
           onOpenAuth={() => setAuthModalOpen(true)}
         />
+      )}
+
+      {quotaNotice && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5 text-xs text-amber-900 flex items-center justify-between gap-3">
+          <span className="font-semibold">{quotaNotice}</span>
+          <button
+            type="button"
+            onClick={() => setQuotaNotice(null)}
+            className="font-bold text-amber-800 hover:underline cursor-pointer"
+          >
+            Fermer
+          </button>
+        </div>
       )}
 
       {/* Rendu des Vues */}

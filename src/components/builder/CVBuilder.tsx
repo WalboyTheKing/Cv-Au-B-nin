@@ -15,6 +15,7 @@ import {
   CVData,
   Education,
   Experience,
+  getCVPermissions,
   Language,
   Plan,
   Skill,
@@ -22,7 +23,14 @@ import {
 } from '../../types';
 import { storageService } from '../../services/storage';
 import { generateCVPdf, triggerPrintDialog } from '../../services/pdfGenerator';
-import { enhanceWithAI } from '../../services/geminiService';
+import {
+  analyzeJobMatch,
+  auditCVWithAI,
+  CVAuditResult,
+  enhanceWithAI,
+  generateCoverLetter,
+  JobMatchAnalysis
+} from '../../services/geminiService';
 import { CVRenderer } from '../templates/CVRenderer';
 import { TemplateGallery } from '../templates/TemplateGallery';
 import {
@@ -55,7 +63,11 @@ import {
   X,
   Sliders,
   Check,
-  Share2
+  Share2,
+  Target,
+  Award,
+  Copy,
+  Wand2
 } from 'lucide-react';
 
 interface CVBuilderProps {
@@ -129,6 +141,21 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
   const [showFullscreenPreview, setShowFullscreenPreview] = useState<boolean>(false);
 
+  // Vérification serveur des droits d'exportation (anti-tampering)
+  const [serverCleanAllowed, setServerCleanAllowed] = useState<boolean | null>(null);
+
+  // Assistant IA Pro (Analyse offre, Audit & Score, Lettre de motivation)
+  const [showAIAssistantModal, setShowAIAssistantModal] = useState<boolean>(false);
+  const [aiAssistantTab, setAiAssistantTab] = useState<'job_match' | 'audit' | 'cover_letter'>('job_match');
+  const [jobOfferInput, setJobOfferInput] = useState<string>('');
+  const [jobMatchResult, setJobMatchResult] = useState<JobMatchAnalysis | null>(null);
+  const [jobMatchLoading, setJobMatchLoading] = useState<boolean>(false);
+  const [auditResult, setAuditResult] = useState<CVAuditResult | null>(null);
+  const [auditLoading, setAuditLoading] = useState<boolean>(false);
+  const [coverLetterText, setCoverLetterText] = useState<string>('');
+  const [coverLetterLoading, setCoverLetterLoading] = useState<boolean>(false);
+  const [copiedLetter, setCopiedLetter] = useState<boolean>(false);
+
   // Mise à jour de l'échelle selon l'écran au montage
   useEffect(() => {
     if (window.innerWidth < 1024) {
@@ -139,6 +166,43 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
       setPreviewScale(0.85);
     }
   }, []);
+
+  // Synchronisation autoritaire des droits avec le serveur
+  useEffect(() => {
+    let cancelled = false;
+    setServerCleanAllowed(null);
+    fetch(`/api/cvs/${encodeURIComponent(cv.id)}/entitlement`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.success) return;
+        setServerCleanAllowed(Boolean(data.permissions?.canDownloadCleanPDF ?? data.isPremiumActive));
+        if (data.access) {
+          setCV((prev) => {
+            if (prev.id !== cv.id) return prev;
+            if (
+              prev.access?.status === data.access.status &&
+              prev.access?.expiresAt === data.access.expiresAt
+            ) {
+              return prev;
+            }
+            return { ...prev, access: data.access };
+          });
+        } else if (data.status === 'none' || data.status === 'expired') {
+          setCV((prev) => {
+            if (prev.id !== cv.id || !prev.access) return prev;
+            if (data.status === 'none') {
+              const { access: _removed, ...rest } = prev;
+              return rest;
+            }
+            return { ...prev, access: { ...prev.access, status: 'expired' } };
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cv.id]);
 
   // Sauvegarde automatique avec anti-rebond et affichage de l'heure exacte
   useEffect(() => {
@@ -153,28 +217,19 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     return () => clearTimeout(timer);
   }, [cv]);
 
-  // Droits d'accès
+  // Droits et 3 permissions distinctes (Créer, Modifier, Exporter PDF)
   const now = Date.now();
+  const userCVCount = storageService.getCVs(currentUser?.id).length;
+  const permissions = getCVPermissions(cv, currentUser, userCVCount, plans);
   const cvExpiresTime = cv.access?.expiresAt ? new Date(cv.access.expiresAt).getTime() : 0;
-  const isCVPremiumActive = Boolean(
-    cv.access &&
-    cv.access.status === 'active' &&
-    cvExpiresTime > now
-  );
   const isCVExpired = Boolean(
     cv.access &&
     cv.access.expiresAt &&
     cvExpiresTime <= now
   );
 
-  const hasActiveAccess = isCVPremiumActive || Boolean(
-    currentUser?.subscription?.status === 'active' &&
-    new Date(currentUser.subscription.expiresAt).getTime() > now &&
-    (currentUser.subscription.planCode === 'cand_24h' ||
-      currentUser.subscription.planCode === 'career_30d' ||
-      currentUser.subscription.planCode === 'premium_7d' ||
-      currentUser.subscription.planCode === 'plus_30d')
-  );
+  const hasActiveAccess =
+    serverCleanAllowed !== null ? serverCleanAllowed : permissions.canDownloadCleanPDF;
 
   const isPremiumUser = hasActiveAccess;
 
@@ -237,17 +292,82 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     }
   };
 
-  // Téléchargement PDF
+  // Correction grammaticale IA du résumé
+  const handleCorrectSummaryGrammar = async () => {
+    if (!cv.profileSummary?.trim()) return;
+    setIsAILoading(true);
+    try {
+      const res = await enhanceWithAI({
+        type: 'grammar',
+        text: cv.profileSummary,
+        jobTitle: cv.personalInfo.jobTitle
+      });
+      setCV((prev) => ({ ...prev, profileSummary: res.content }));
+    } finally {
+      setIsAILoading(false);
+    }
+  };
+
+  // Assistant IA Pro : Offre d'emploi, Audit CV & Lettre de motivation
+  const handleRunJobMatch = async () => {
+    if (!jobOfferInput.trim()) return;
+    setJobMatchLoading(true);
+    try {
+      const result = await analyzeJobMatch(cv, jobOfferInput.trim());
+      setJobMatchResult(result);
+    } finally {
+      setJobMatchLoading(false);
+    }
+  };
+
+  const handleRunCVAudit = async () => {
+    setAuditLoading(true);
+    try {
+      const result = await auditCVWithAI(cv);
+      setAuditResult(result);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const handleGenerateCoverLetter = async () => {
+    setCoverLetterLoading(true);
+    try {
+      const result = await generateCoverLetter(cv, jobOfferInput.trim());
+      setCoverLetterText(result.content);
+    } finally {
+      setCoverLetterLoading(false);
+    }
+  };
+
+  // Téléchargement PDF avec vérification serveur stricte avant retrait du filigrane
   const handleDownloadPDF = async () => {
     setIsExporting(true);
     setExportError(null);
     setExportProgress(10);
     try {
+      let allowClean = hasActiveAccess;
+      try {
+        const chkRes = await fetch(`/api/cvs/${encodeURIComponent(cv.id)}/export-check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser?.id || cv.userId })
+        });
+        if (chkRes.ok) {
+          const chk = await chkRes.json();
+          if (chk.success) {
+            allowClean = Boolean(chk.allowWatermarkRemoval);
+          }
+        }
+      } catch {
+        // Repli sur l'état des permissions calculées si hors-ligne
+      }
+
       const filename = `${cv.personalInfo.lastName || 'Candidat'}_${cv.personalInfo.firstName || 'CV'}.pdf`.replace(/\s+/g, '_');
       await generateCVPdf('cv-document-preview', {
         filename,
         cvData: cv,
-        hasWatermark: !hasActiveAccess,
+        hasWatermark: !allowClean,
         watermarkText: 'Créé avec CV Pro Bénin — Version Découverte',
         onProgress: (p) => setExportProgress(p)
       });
@@ -349,6 +469,17 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             <span className="text-emerald-800 font-extrabold truncate max-w-24 sm:max-w-none">
               {currentTemplate.name}
             </span>
+          </button>
+
+          {/* Bouton Assistant IA Pro */}
+          <button
+            onClick={() => setShowAIAssistantModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-all border border-emerald-300 cursor-pointer"
+            title="Analyse d'offre d'emploi, score qualité et lettre de motivation IA"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
+            <span className="hidden md:inline">Assistant IA Pro</span>
+            <span className="md:hidden">IA Pro</span>
           </button>
 
           {/* Bouton Aperçu Plein Écran */}
@@ -572,6 +703,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
               cv={cv}
               setCV={setCV}
               onEnhance={handleEnhanceSummary}
+              onCorrectGrammar={handleCorrectSummaryGrammar}
               isAILoading={isAILoading}
             />
           )}
@@ -600,6 +732,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             <StepDownload
               cv={cv}
               isPremiumUser={isPremiumUser}
+              permissions={permissions}
               onDownload={handleDownloadPDF}
               onPrint={triggerPrintDialog}
               onOpenPricing={onOpenPricing}
@@ -866,6 +999,319 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
           </div>
         </div>
       )}
+
+      {/* ==================================================================== */}
+      {/* 6. MODALE ASSISTANT IA PRO (OFFRE D'EMPLOI, AUDIT CV, LETTRE)        */}
+      {/* ==================================================================== */}
+      {showAIAssistantModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 max-h-[92vh] overflow-y-auto shadow-2xl space-y-5 relative">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+              <div>
+                <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-full text-[11px] font-bold mb-1">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Assistant IA Pro • Fidèle à vos données réelles</span>
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Optimisation de candidature</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  L'IA améliore la formulation et compare votre CV à une annonce sans jamais inventer de diplômes ou d'expériences.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAIAssistantModal(false)}
+                className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Onglets Assistant IA */}
+            <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 text-xs font-bold">
+              <button
+                onClick={() => setAiAssistantTab('job_match')}
+                className={`px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  aiAssistantTab === 'job_match'
+                    ? 'bg-emerald-700 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <Target className="w-3.5 h-3.5" />
+                <span>Analyse Offre d'emploi</span>
+              </button>
+              <button
+                onClick={() => setAiAssistantTab('audit')}
+                className={`px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  aiAssistantTab === 'audit'
+                    ? 'bg-emerald-700 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <Award className="w-3.5 h-3.5" />
+                <span>Score & Audit CV</span>
+              </button>
+              <button
+                onClick={() => setAiAssistantTab('cover_letter')}
+                className={`px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  aiAssistantTab === 'cover_letter'
+                    ? 'bg-emerald-700 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Lettre de motivation</span>
+              </button>
+            </div>
+
+            {/* ONGLET 1 : ANALYSE OFFRE D'EMPLOI */}
+            {aiAssistantTab === 'job_match' && (
+              <div className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1.5">
+                    Collez le texte complet de l'offre d'emploi ciblée :
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={jobOfferInput}
+                    onChange={(e) => setJobOfferInput(e.target.value)}
+                    placeholder="Ex : Nous recrutons un Comptable Confirmé à Cotonou maîtrisant SYSCOHADA révisé, Sage Saari, la fiscalité DGI..."
+                    className="w-full p-3 rounded-xl border border-slate-300 focus:border-emerald-600 outline-hidden text-xs leading-relaxed"
+                  />
+                </div>
+
+                <button
+                  onClick={handleRunJobMatch}
+                  disabled={jobMatchLoading || !jobOfferInput.trim()}
+                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 text-white font-bold rounded-xl inline-flex items-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Target className="w-4 h-4" />
+                  <span>
+                    {jobMatchLoading ? 'Analyse en cours...' : "Comparer mon CV à cette offre d'emploi"}
+                  </span>
+                </button>
+
+                {jobMatchResult && (
+                  <div className="space-y-4 pt-3 border-t border-slate-200">
+                    <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase text-emerald-800">
+                          Taux d'adéquation estimé
+                        </span>
+                        <p className="text-xs text-emerald-900 mt-0.5">
+                          Basé uniquement sur les informations réelles présentes dans votre CV.
+                        </p>
+                      </div>
+                      <div className="text-2xl font-black text-emerald-800 font-mono">
+                        {jobMatchResult.matchScore}%
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                        <h4 className="font-extrabold text-emerald-900">Compétences correspondantes</h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {jobMatchResult.matchingSkills.length > 0 ? (
+                            jobMatchResult.matchingSkills.map((s, i) => (
+                              <span
+                                key={i}
+                                className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-900 text-[11px] font-semibold"
+                              >
+                                {s}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-slate-500">Aucune correspondance directe détectée.</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2">
+                        <h4 className="font-extrabold text-amber-950">Compétences manquantes</h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {jobMatchResult.missingSkills.length > 0 ? (
+                            jobMatchResult.missingSkills.map((s, i) => (
+                              <span
+                                key={i}
+                                className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 text-[11px] font-semibold"
+                              >
+                                {s}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-emerald-800 font-medium">Toutes les exigences clés sont couvertes !</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-amber-800 pt-1">
+                          N'ajoutez ces compétences à votre CV que si vous les maîtrisez réellement.
+                        </p>
+                      </div>
+                    </div>
+
+                    {jobMatchResult.importantKeywords.length > 0 && (
+                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                        <h4 className="font-extrabold text-slate-900">Mots-clés ATS importants de l'offre</h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {jobMatchResult.importantKeywords.map((kw, i) => (
+                            <span
+                              key={i}
+                              className="px-2 py-0.5 rounded-md bg-white border border-slate-300 text-slate-700 font-mono text-[11px]"
+                            >
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-1.5">
+                        <h4 className="font-extrabold text-slate-900">Expériences à mieux présenter</h4>
+                        <ul className="space-y-1 text-slate-700 list-disc pl-4">
+                          {jobMatchResult.experienceTips.map((tip, i) => (
+                            <li key={i}>{tip}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-1.5">
+                        <h4 className="font-extrabold text-slate-900">Améliorations recommandées</h4>
+                        <ul className="space-y-1 text-slate-700 list-disc pl-4">
+                          {jobMatchResult.recommendations.map((rec, i) => (
+                            <li key={i}>{rec}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ONGLET 2 : SCORE & AUDIT CV */}
+            {aiAssistantTab === 'audit' && (
+              <div className="space-y-4 text-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <div>
+                    <h4 className="font-extrabold text-slate-900">Évaluation globale & lisibilité ATS</h4>
+                    <p className="text-slate-600 mt-0.5">
+                      Identifiez les points forts, les faiblesses et les recommandations d'amélioration.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleRunCVAudit}
+                    disabled={auditLoading}
+                    className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 text-white font-bold rounded-xl inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    <Award className="w-4 h-4" />
+                    <span>{auditLoading ? 'Audit en cours...' : 'Lancer le score qualité'}</span>
+                  </button>
+                </div>
+
+                {auditResult && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                      <span className="font-bold text-emerald-900">Score de qualité global du CV</span>
+                      <span className="text-2xl font-black font-mono text-emerald-800">
+                        {auditResult.score} / 100
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl bg-white border border-emerald-200 space-y-2">
+                        <h5 className="font-extrabold text-emerald-900">Points forts</h5>
+                        <ul className="space-y-1 text-slate-700 list-disc pl-4">
+                          {auditResult.strengths.map((s, i) => (
+                            <li key={i}>{s}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-white border border-amber-200 space-y-2">
+                        <h5 className="font-extrabold text-amber-900">Points à renforcer</h5>
+                        <ul className="space-y-1 text-slate-700 list-disc pl-4">
+                          {auditResult.weaknesses.map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                      <h5 className="font-extrabold text-slate-900">Recommandations prioritaires</h5>
+                      <ul className="space-y-1 text-slate-700 list-disc pl-4">
+                        {auditResult.recommendations.map((r, i) => (
+                          <li key={i}>{r}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ONGLET 3 : LETTRE DE MOTIVATION */}
+            {aiAssistantTab === 'cover_letter' && (
+              <div className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1.5">
+                    Poste ou annonce ciblée (facultatif — reprend le texte saisi dans l'onglet Offre) :
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={jobOfferInput}
+                    onChange={(e) => setJobOfferInput(e.target.value)}
+                    placeholder="Ex : Candidature au poste de Responsable Commercial chez ..."
+                    className="w-full p-3 rounded-xl border border-slate-300 focus:border-emerald-600 outline-hidden text-xs"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleGenerateCoverLetter}
+                    disabled={coverLetterLoading}
+                    className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 text-white font-bold rounded-xl inline-flex items-center gap-2 cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>
+                      {coverLetterLoading ? 'Rédaction en cours...' : 'Générer ma lettre de motivation'}
+                    </span>
+                  </button>
+
+                  {coverLetterText && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(coverLetterText);
+                        setCopiedLetter(true);
+                        setTimeout(() => setCopiedLetter(false), 2500);
+                      }}
+                      className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedLetter ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-700" />
+                          <span className="text-emerald-800">Copiée !</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copier le texte</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {coverLetterText && (
+                  <textarea
+                    rows={12}
+                    value={coverLetterText}
+                    onChange={(e) => setCoverLetterText(e.target.value)}
+                    className="w-full p-4 rounded-2xl border border-slate-300 bg-slate-50 font-sans text-xs leading-relaxed text-slate-800 focus:bg-white focus:border-emerald-600 outline-hidden"
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1062,30 +1508,45 @@ function StepProfileSummary({
   cv,
   setCV,
   onEnhance,
+  onCorrectGrammar,
   isAILoading
 }: {
   cv: CVData;
   setCV: React.Dispatch<React.SetStateAction<CVData>>;
   onEnhance: () => void;
+  onCorrectGrammar: () => void;
   isAILoading: boolean;
 }) {
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-start gap-2">
+      <div className="flex flex-wrap justify-between items-start gap-2">
         <div>
           <h2 className="text-base font-extrabold text-slate-900">2. Résumé de Profil Professionnel</h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Présentez votre parcours, vos atouts majeurs et votre projet en 3 à 5 phrases percutantes.
           </p>
         </div>
-        <button
-          onClick={onEnhance}
-          disabled={isAILoading}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-          <span>{isAILoading ? 'Optimisation...' : 'Améliorer avec l’IA'}</span>
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onCorrectGrammar}
+            disabled={isAILoading || !cv.profileSummary?.trim()}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+            title="Corriger l'orthographe et la grammaire"
+          >
+            <Wand2 className="w-3.5 h-3.5 text-slate-600" />
+            <span>Corriger</span>
+          </button>
+          <button
+            type="button"
+            onClick={onEnhance}
+            disabled={isAILoading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+            <span>{isAILoading ? 'Optimisation...' : 'Améliorer avec l’IA'}</span>
+          </button>
+        </div>
       </div>
 
       <div>
@@ -1140,6 +1601,8 @@ function StepExperiences({
   cv: CVData;
   setCV: React.Dispatch<React.SetStateAction<CVData>>;
 }) {
+  const [aiBusyExpId, setAiBusyExpId] = useState<string | null>(null);
+
   const addExperience = () => {
     const newExp: Experience = {
       id: 'exp_' + Date.now(),
@@ -1160,6 +1623,23 @@ function StepExperiences({
       ...cv,
       experiences: cv.experiences.map((e) => (e.id === id ? { ...e, ...updates } : e))
     });
+  };
+
+  const handleExpAI = async (exp: Experience, mode: 'grammar' | 'experience') => {
+    setAiBusyExpId(`${exp.id}_${mode}`);
+    try {
+      const res = await enhanceWithAI({
+        type: mode,
+        text: exp.description,
+        jobTitle: exp.role || cv.personalInfo.jobTitle,
+        context: exp.company
+      });
+      if (res.content) {
+        updateExp(exp.id, { description: res.content });
+      }
+    } finally {
+      setAiBusyExpId(null);
+    }
   };
 
   const removeExp = (id: string) => {
@@ -1322,9 +1802,33 @@ function StepExperiences({
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
-                Missions, tâches et réalisations
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <label className="block text-[11px] font-bold text-slate-700">
+                  Missions, tâches et réalisations
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={aiBusyExpId !== null || !exp.description?.trim()}
+                    onClick={() => handleExpAI(exp, 'grammar')}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-[10px] font-bold text-slate-700 cursor-pointer disabled:opacity-40"
+                    title="Corriger fautes et syntaxe"
+                  >
+                    <Wand2 className="w-3 h-3" />
+                    <span>{aiBusyExpId === `${exp.id}_grammar` ? '...' : 'Corriger'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={aiBusyExpId !== null}
+                    onClick={() => handleExpAI(exp, 'experience')}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-[10px] font-bold text-emerald-800 cursor-pointer disabled:opacity-40"
+                    title="Reformuler professionnellement avec verbes d'action"
+                  >
+                    <Sparkles className="w-3 h-3 text-emerald-600" />
+                    <span>{aiBusyExpId === `${exp.id}_experience` ? 'IA...' : 'Reformuler IA'}</span>
+                  </button>
+                </div>
+              </div>
               <textarea
                 rows={3}
                 value={exp.description}
@@ -2151,6 +2655,7 @@ function StepValidation({
 function StepDownload({
   cv,
   isPremiumUser,
+  permissions,
   onDownload,
   onPrint,
   onOpenPricing,
@@ -2159,6 +2664,7 @@ function StepDownload({
 }: {
   cv: CVData;
   isPremiumUser: boolean;
+  permissions: ReturnType<typeof getCVPermissions>;
   onDownload: () => void;
   onPrint: () => void;
   onOpenPricing: () => void;
@@ -2174,6 +2680,28 @@ function StepDownload({
         </p>
       </div>
 
+      {/* Résumé des 3 permissions distinctes */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left text-[11px]">
+        <div className="p-3 rounded-xl bg-white border border-slate-200">
+          <div className="font-bold text-slate-700">1. Création</div>
+          <div className="font-extrabold text-emerald-800 mt-0.5">
+            {permissions.canCreateCV ? 'Autorisée' : 'Quota atteint'}
+          </div>
+        </div>
+        <div className="p-3 rounded-xl bg-white border border-slate-200">
+          <div className="font-bold text-slate-700">2. Modification</div>
+          <div className="font-extrabold text-emerald-800 mt-0.5">
+            {permissions.canEditCV ? 'Toujours conservée' : 'Suspendue'}
+          </div>
+        </div>
+        <div className="p-3 rounded-xl bg-white border border-slate-200">
+          <div className="font-bold text-slate-700">3. Export PDF</div>
+          <div className={`font-extrabold mt-0.5 ${isPremiumUser ? 'text-emerald-800' : 'text-amber-700'}`}>
+            {isPremiumUser ? 'Sans filigrane' : 'Avec filigrane Découverte'}
+          </div>
+        </div>
+      </div>
+
       <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200 text-center space-y-4">
         <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto">
           <Download className="w-8 h-8" />
@@ -2182,7 +2710,7 @@ function StepDownload({
         <div>
           <h3 className="font-extrabold text-slate-900 text-base">{cv.title}</h3>
           <p className="text-xs text-slate-500 mt-1">
-            Format A4 Standard (210 x 297 mm) • Texte sélectionnable • Compatible ATS
+            Format A4 Standard (210 x 297 mm) • Texte sélectionnable • Liens cliquables • Compatible ATS
           </p>
         </div>
 
@@ -2191,13 +2719,13 @@ function StepDownload({
           {isPremiumUser ? (
             <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full font-bold">
               <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-              Téléchargement sans filigrane (Formule Premium active)
+              Téléchargement sans filigrane (Accès validé côté serveur)
             </span>
           ) : (
             <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl max-w-md mx-auto text-left">
               <div className="font-bold text-amber-900 text-xs">Offre Découverte : filigrane discret inclus</div>
               <p className="text-[11px] text-amber-800 mt-0.5 leading-snug">
-                Pour seulement 500 FCFA (accès 24h) ou 1 000 FCFA (accès 30 jours), retirez immédiatement le filigrane et débloquez tous les 15 modèles.
+                Pour seulement 500 FCFA (accès 24h calculé côté serveur) ou 1 000 FCFA (accès 30 jours), retirez immédiatement le filigrane sur tous les 15 modèles.
               </p>
               <button
                 onClick={onOpenPricing}

@@ -38,7 +38,14 @@ export const Footer: React.FC<FooterProps> = ({ onOpenLegal, onNavigate, onOpenA
               </div>
               <div className="flex items-center gap-2">
                 <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Support : {APP_CONFIG.supportPhone} (WhatsApp / Appel)</span>
+                <a
+                  href="https://wa.me/2290194537741"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-emerald-400 transition-colors underline decoration-slate-700 underline-offset-2"
+                >
+                  Support WhatsApp : {APP_CONFIG.supportPhone}
+                </a>
               </div>
               <div className="flex items-center gap-2">
                 <Mail className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
