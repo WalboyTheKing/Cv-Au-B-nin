@@ -80,11 +80,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setCurrentOrder(res.order);
       onOrderCreated?.(res.order);
 
-      // Synchronisation asynchrone côté serveur
+      // Synchronisation asynchrone côté serveur avec le même ID de commande
       fetch('/api/orders/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          orderId: res.order.id,
+          orderNumber: res.order.orderNumber,
           userId: currentUser.id,
           userEmail: currentUser.email,
           userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
@@ -152,6 +154,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             transactionRef: transactionRef.trim(),
             amountDeclared: Number(amountDeclared),
             senderPhone: senderPhone.trim(),
+            transactionDate,
             notes: notes.trim(),
             proofUrl
           })

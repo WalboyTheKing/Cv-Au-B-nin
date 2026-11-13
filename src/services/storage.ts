@@ -585,6 +585,15 @@ class StorageService {
       all.unshift(updated);
     }
     this.setItem('cvs', all);
+
+    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+      fetch('/api/cvs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      }).catch(() => {});
+    }
+
     return updated;
   }
 
@@ -593,6 +602,11 @@ class StorageService {
     const filtered = all.filter((c) => c.id !== id);
     if (filtered.length !== all.length) {
       this.setItem('cvs', filtered);
+      if (typeof window !== 'undefined' && typeof fetch === 'function') {
+        fetch(`/api/cvs/${encodeURIComponent(id)}`, {
+          method: 'DELETE'
+        }).catch(() => {});
+      }
       return true;
     }
     return false;

@@ -9,7 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import fs from 'fs';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { parseCVText } from './src/services/documentParser.ts';
 
 dotenv.config();
@@ -773,7 +773,7 @@ app.post('/api/cvs/:id/export-check', (req, res) => {
 
 // 4. Création d'une commande Moov Money rattachée à un CV précis
 app.post('/api/orders/create', (req, res) => {
-  const { userId, userEmail, userName, planCode, cvId, cvTitle } = req.body;
+  const { orderId, orderNumber: clientOrderNumber, userId, userEmail, userName, planCode, cvId, cvTitle } = req.body;
 
   const validPlans: Record<
     string,
@@ -815,11 +815,18 @@ app.post('/api/orders/create', (req, res) => {
   }
 
   const orders = loadOrders();
-  const orderNumber = `CMD-MOOV-${Date.now().toString().slice(-6)}`;
+  if (orderId) {
+    const existing = orders.find((o) => o.id === orderId);
+    if (existing) {
+      return res.status(200).json({ success: true, order: existing });
+    }
+  }
+
+  const orderNumber = clientOrderNumber || `CMD-MOOV-${Date.now().toString().slice(-6)}`;
   const now = new Date().toISOString();
 
   const newOrder = {
-    id: 'ord_' + Date.now(),
+    id: orderId || 'ord_' + Date.now(),
     orderNumber,
     userId,
     userEmail,
@@ -847,7 +854,7 @@ app.post('/api/orders/create', (req, res) => {
 
 // 5. Déclaration manuelle de transaction Moov Money
 app.post('/api/orders/declare', (req, res) => {
-  const { orderId, transactionRef, amountDeclared, senderPhone, notes, proofUrl } = req.body;
+  const { orderId, transactionRef, amountDeclared, senderPhone, transactionDate, notes, proofUrl } = req.body;
 
   if (!orderId || !transactionRef || !senderPhone) {
     return res.status(400).json({
@@ -884,6 +891,7 @@ app.post('/api/orders/declare', (req, res) => {
     transactionRef: cleanRef,
     amountDeclared: Number(amountDeclared) || order.amountXOF,
     senderPhone: String(senderPhone).trim(),
+    transactionDate: transactionDate ? String(transactionDate).trim() : new Date().toISOString().split('T')[0],
     notes: String(notes || '').trim(),
     proofUrl: proofUrl || '',
     submittedAt: new Date().toISOString()
@@ -1430,12 +1438,16 @@ Règles : N'invente aucun diplôme fictif. Rédige en français soigné, percuta
       prompt = `En tant qu'expert RH au Bénin, reformule cette expérience pour "${jobTitle}" avec des verbes d'action au format liste à puces :
 "${text || ''}"
 Renvoie directement le texte reformulé.`;
+    } else if (type === 'grammar') {
+      prompt = `Corrige l'orthographe, la grammaire et le style professionnel de ce texte de CV en français sans en changer le sens :
+"${text || ''}"
+Renvoie UNIQUEMENT le texte corrigé.`;
     } else {
       prompt = `Propose 6 compétences clés recherchées au Bénin pour le métier de "${jobTitle}". Sépare par des virgules.`;
     }
 
     let responseText = '';
-    const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest'];
+    const candidateModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let lastError: any = null;
 
     for (const model of candidateModels) {
@@ -1444,9 +1456,12 @@ Renvoie directement le texte reformulé.`;
           () =>
             client.models.generateContent({
               model,
-              contents: prompt
+              contents: prompt,
+              config: model === 'gemini-4-hydrogen'
+                ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                : undefined
             }),
-          7000
+          15000
         );
         if (response.text) {
           responseText = response.text.trim();
@@ -1750,7 +1765,7 @@ N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide 
   "hobbies": ["string"]
 }`;
 
-      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest'];
+      const candidateModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
       for (const model of candidateModels) {
         try {
           const response = await callWithTimeout(
@@ -1761,13 +1776,17 @@ N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide 
                   { text: `${systemPrompt}\n\nVoici le contenu textuel extrait du CV à analyser fidèlement :\n\n${docText}` }
                 ],
                 config: {
-                  responseMimeType: 'application/json'
+                  responseMimeType: 'application/json',
+                  ...(model === 'gemini-4-hydrogen'
+                    ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                    : {})
                 }
               }),
-            5000 // 5 secondes max
+            20000
           );
           if (response?.text) {
-            parsedJson = JSON.parse(response.text.trim());
+            const cleanJson = response.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+            parsedJson = JSON.parse(cleanJson);
             break;
           }
         } catch (err: any) {
