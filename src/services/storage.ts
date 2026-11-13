@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { APP_CONFIG, INITIAL_PLANS, CV_TEMPLATES, MOOV_MONEY_BENEFICIARY } from '../config';
-import {
+import { APP_CONFIG, INITIAL_PLANS, CV_TEMPLATES, MOOV_MONEY_BENEFICIARY } from '../config/index.ts';
+import type {
   AdminMetrics,
   AuditLog,
   CVData,
@@ -16,7 +16,7 @@ import {
   TemplateDefinition,
   UserProfile,
   UserSubscription
-} from '../types';
+} from '../types/index.ts';
 
 const PREFIX = APP_CONFIG.storageKeyPrefix;
 

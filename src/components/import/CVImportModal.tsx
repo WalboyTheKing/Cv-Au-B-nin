@@ -99,17 +99,17 @@ export const CVImportModal: React.FC<CVImportModalProps> = ({ onCVImported, onCa
 
   const validateAndSetFile = (f: File) => {
     setErrorMsg('');
-    const validExtensions = ['.pdf', '.docx', '.doc', '.txt'];
+    const validExtensions = ['.pdf', '.docx', '.doc', '.txt', '.png', '.jpg', '.jpeg', '.webp'];
     const nameLower = f.name.toLowerCase();
     const isValid = validExtensions.some((ext) => nameLower.endsWith(ext));
 
     if (!isValid) {
-      setErrorMsg('Format non pris en charge. Veuillez fournir un fichier PDF, Word (DOCX/DOC) ou Texte (TXT).');
+      setErrorMsg('Format non pris en charge. Veuillez fournir un fichier PDF, Word (DOCX/DOC), Texte (TXT) ou Image (PNG/JPG).');
       return;
     }
 
-    if (f.size > 10 * 1024 * 1024) {
-      setErrorMsg('Le fichier est trop lourd. La taille maximale autorisée est de 10 Mo.');
+    if (f.size > 15 * 1024 * 1024) {
+      setErrorMsg('Le fichier est trop lourd. La taille maximale autorisée est de 15 Mo.');
       return;
     }
 
@@ -258,7 +258,7 @@ export const CVImportModal: React.FC<CVImportModalProps> = ({ onCVImported, onCa
                   }`}
                 >
                   <FileText className="w-4 h-4 text-emerald-600" />
-                  <span>Option 1 : Importer un fichier (PDF, Word DOCX/DOC, TXT)</span>
+                  <span>Option 1 : Importer un fichier (PDF, Word, TXT, Image PNG/JPG)</span>
                 </button>
                 <button
                   type="button"
@@ -299,7 +299,7 @@ export const CVImportModal: React.FC<CVImportModalProps> = ({ onCVImported, onCa
                     </div>
 
                     <p className="font-extrabold text-base text-slate-800">
-                      Glissez et déposez votre CV ici
+                       Glissez et déposez votre CV ici
                     </p>
                     <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
                       Notre intelligence d'extraction analysera vos coordonnées, expériences, diplômes et compétences sans que vous n'ayez à tout retaper.
@@ -312,7 +312,7 @@ export const CVImportModal: React.FC<CVImportModalProps> = ({ onCVImported, onCa
                         <input
                           ref={fileInputRef}
                           type="file"
-                          accept=".pdf,.docx,.doc,.txt"
+                          accept=".pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp"
                           onChange={handleFileChange}
                           className="hidden"
                         />
@@ -320,7 +320,7 @@ export const CVImportModal: React.FC<CVImportModalProps> = ({ onCVImported, onCa
                     </div>
 
                     <div className="mt-4 text-[11px] text-slate-400">
-                      Formats acceptés : PDF, DOCX, DOC, TXT • Jusqu'à 10 Mo
+                      Formats acceptés : PDF, Word (DOCX/DOC), TXT, Images (PNG/JPG) • Jusqu'à 15 Mo
                     </div>
                   </div>
 

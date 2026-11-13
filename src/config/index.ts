@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Plan, TemplateDefinition, TemplateCategory } from '../types';
+import type { Plan, TemplateDefinition, TemplateCategory } from '../types/index.ts';
 
 export const MOOV_MONEY_BENEFICIARY = {
   beneficiaryName: 'Waaliyou Z Labouda',

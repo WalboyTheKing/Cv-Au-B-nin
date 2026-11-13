@@ -4,9 +4,9 @@
  */
 
 import mammoth from 'mammoth';
-import { CVData, Experience, Education, Skill, Language, CustomSection } from '../types';
-import { INITIAL_DEMO_CV } from './storage';
-import { BENIN_CITIES } from '../config';
+import type { CVData, Experience, Education, Skill, Language, CustomSection } from '../types/index.ts';
+import { INITIAL_DEMO_CV } from './storage.ts';
+import { BENIN_CITIES } from '../config/index.ts';
 
 export interface ParseResult {
   success: boolean;
@@ -620,15 +620,45 @@ async function extractTextFromDOCXBuffer(buffer: ArrayBuffer): Promise<string> {
 }
 
 /**
- * Analyse et extraction d'un fichier de CV (PDF, DOCX, DOC, TXT)
+ * Nettoie les artefacts courants d'OCR (mots collés en français, symboles résiduels)
+ */
+export function cleanOcrArtifacts(text: string): string {
+  if (!text) return '';
+  return text
+    // Espacer les mots français fusionnés par le wrapping OCR
+    .replace(/\bdesites\b/gi, 'de sites')
+    .replace(/\bdelogiciels\b/gi, 'de logiciels')
+    .replace(/\bdetéléphones\b/gi, 'de téléphones')
+    .replace(/\bdépannageinformatique\b/gi, 'dépannage informatique')
+    .replace(/\boptimisationdes\b/gi, 'optimisation des')
+    .replace(/\boutilsd'intelligence\b/gi, "outils d'intelligence")
+    .replace(/\betPrompt\b/gi, 'et Prompt')
+    .replace(/\betPowerPoint\b/gi, 'et PowerPoint')
+    .replace(/\betCapCut\b/gi, 'et CapCut')
+    .replace(/\benSystèmes\b/gi, 'en Systèmes')
+    .replace(/\betLogiciels\b/gi, 'et Logiciels')
+    .replace(/\benInformatique\b/gi, 'en Informatique')
+    .replace(/\bactivitésde\b/gi, 'activités de')
+    .replace(/\bd'unesociété\b/gi, "d'une société")
+    .replace(/\bOptiondu\b/gi, 'Option du')
+    .replace(/\betTechniques\b/gi, 'et Techniques')
+    .replace(/\bTechniquesIndustrielles\b/gi, 'Techniques Industrielles')
+    // Reconstituer les liens LinkedIn scindés par des sauts de ligne avec bruit OCR
+    .replace(/(linkedin\.com\/in\/[a-zA-Z0-9_-]+)[\s\r\n]+(?:[I|®©&•\-\*«»\s]*)([a-zA-Z0-9_/-]+)/gi, '$1-$2')
+    // Reconstituer les URLs de portfolio scindées
+    .replace(/([a-zA-Z0-9.-]+\.[a-zA-Z]{2,4})[\s\r\n]+(?:[I|®©&•\-\*«»\s]*)([a-zA-Z0-9_/-]+)/gi, '$1/$2');
+}
+
+/**
+ * Analyse et extraction d'un fichier de CV (PDF, DOCX, DOC, TXT, Images PNG/JPG)
  */
 export async function parseCVFile(
   file: File,
   onProgress?: (progress: number, stepLabel: string) => void
 ): Promise<ParseResult> {
-  const maxBytes = 10 * 1024 * 1024; // 10 Mo
+  const maxBytes = 15 * 1024 * 1024; // 15 Mo
   if (file.size > maxBytes) {
-    throw new Error('Le fichier est trop volumineux. La taille maximale autorisée est de 10 Mo.');
+    throw new Error('Le fichier est trop volumineux. La taille maximale autorisée est de 15 Mo.');
   }
 
   const nameLower = file.name.toLowerCase();
@@ -636,9 +666,10 @@ export async function parseCVFile(
   const isDOCX = nameLower.endsWith('.docx') || file.type.includes('wordprocessingml');
   const isDOC = nameLower.endsWith('.doc') || file.type.includes('msword');
   const isTXT = file.type === 'text/plain' || nameLower.endsWith('.txt');
+  const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(nameLower);
 
-  if (!isPDF && !isDOCX && !isDOC && !isTXT) {
-    throw new Error('Format de fichier non pris en charge. Veuillez fournir un fichier PDF, DOCX, DOC ou TXT.');
+  if (!isPDF && !isDOCX && !isDOC && !isTXT && !isImage) {
+    throw new Error('Format de fichier non pris en charge. Veuillez fournir un fichier PDF, DOCX, DOC, TXT ou Image (PNG/JPG).');
   }
 
   onProgress?.(15, 'Lecture du document...');
@@ -655,39 +686,88 @@ export async function parseCVFile(
   const base64Data = await fileToBase64(file);
   const pureBase64 = base64Data.split(',')[1] || base64Data;
 
-  // --- ÉTAPE 1 : EXTRACTION TEXTUELLE DE HAUTE FIDÉLITÉ (SERVEUR / LOCAL) ---
+  onProgress?.(40, 'Extraction textuelle et OCR en cours...');
+
+  // --- ÉTAPE 1 & 2 : TRAITEMENT SERVEUR UNIFIÉ AVEC REPLI IMMÉDIAT ---
+  let serverResult: any = null;
   let extractedRawText = '';
+
   try {
-    onProgress?.(30, 'Extraction textuelle de haute fidélité...');
-    const extractRes = await fetch('/api/cv/extract-text', {
+    const payload: any = {
+      fileBase64: pureBase64,
+      mimeType: file.type || (isPDF ? 'application/pdf' : (isImage ? 'image/jpeg' : 'text/plain')),
+      fileName: file.name
+    };
+
+    const res = await fetch('/api/cv/parse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fileBase64: pureBase64,
-        mimeType: file.type || (isPDF ? 'application/pdf' : 'text/plain'),
-        fileName: file.name
-      })
+      body: JSON.stringify(payload)
     });
-    if (extractRes.ok) {
-      const extJson = await extractRes.json();
-      if (extJson.success && extJson.text && extJson.text.trim().length > 10) {
-        extractedRawText = extJson.text.trim();
+
+    if (res.ok) {
+      serverResult = await res.json();
+      if (serverResult?.rawText) {
+        extractedRawText = serverResult.rawText;
       }
     }
-  } catch (extErr) {
-    console.warn('Extraction serveur non disponible, bascule locale:', extErr);
+  } catch (apiErr) {
+    console.warn('Appel serveur /api/cv/parse non disponible, tentative /api/cv/extract-text:', apiErr);
   }
 
-  // Repli local si échec réseau
+  // Si le serveur a renvoyé des données structurées directement
+  if (serverResult?.success && serverResult?.data) {
+    onProgress?.(95, 'Finalisation des rubriques...');
+    if (serverResult.isAI) {
+      const aiResult = buildCVFromAIData(serverResult.data, file.name);
+      if (extractedRawText) aiResult.extractedRawText = extractedRawText;
+      return aiResult;
+    } else {
+      // Données structurées par le moteur expert serveur
+      const cvObj = serverResult.data as CVData;
+      return {
+        success: true,
+        cvData: cvObj,
+        extractedRawText: extractedRawText || `Document source : ${file.name}`,
+        detectedFields: serverResult.detectedFields || ['Nom et prénom', 'Titre professionnel', 'Coordonnées'],
+        warnings: serverResult.warnings || [],
+        missingFields: [],
+        isAI: false
+      };
+    }
+  }
+
+  // Repli : Si pas de texte extrait du serveur, extraction textuelle locale
+  if (!extractedRawText) {
+    try {
+      const extractRes = await fetch('/api/cv/extract-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileBase64: pureBase64,
+          mimeType: file.type || (isPDF ? 'application/pdf' : 'text/plain'),
+          fileName: file.name
+        })
+      });
+      if (extractRes.ok) {
+        const extJson = await extractRes.json();
+        if (extJson.success && extJson.text && extJson.text.trim().length > 10) {
+          extractedRawText = extJson.text.trim();
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Repli local en mémoire si réseau indisponible
   if (!extractedRawText) {
     if (isDOCX || isDOC) {
-      onProgress?.(35, 'Extraction structurée du fichier Word...');
+      onProgress?.(60, 'Extraction structurée du fichier Word...');
       extractedRawText = await extractTextFromDOCXBuffer(arrayBuf);
     } else if (isTXT) {
-      onProgress?.(35, 'Lecture du texte...');
+      onProgress?.(60, 'Lecture du texte...');
       extractedRawText = await file.text();
     } else if (isPDF) {
-      onProgress?.(35, 'Décodage des couches textuelles du PDF...');
+      onProgress?.(60, 'Décodage des couches textuelles du PDF...');
       extractedRawText = extractCleanTextFromPDFBuffer(arrayBuf);
     }
   }
@@ -701,43 +781,11 @@ export async function parseCVFile(
     }
   }
 
-  onProgress?.(55, 'Analyse et classification intelligente des rubriques...');
-
-  // --- ÉTAPE 2 : ESSAI VIA LE SERVEUR GEMINI API ---
-  try {
-    const payload: any = {
-      fileBase64: pureBase64,
-      mimeType: file.type || (isPDF ? 'application/pdf' : 'text/plain'),
-      fileName: file.name,
-      rawText: extractedRawText
-    };
-
-    const res = await fetch('/api/cv/parse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.data && (json.data.personalInfo || json.data.experiences)) {
-        onProgress?.(95, 'Finalisation des rubriques...');
-        const aiResult = buildCVFromAIData(json.data, file.name);
-        if (extractedRawText) {
-          aiResult.extractedRawText = extractedRawText;
-        }
-        return aiResult;
-      } else if (json.rawText && json.rawText.length > extractedRawText.length) {
-        extractedRawText = json.rawText;
-      }
-    }
-  } catch (apiErr) {
-    console.warn("API serveur Gemini non disponible ou en erreur, bascule vers l'analyse experte:", apiErr);
-  }
-
-  // --- ÉTAPE 3 : ANALYSE HEURISTIQUE AVANCÉE INFAILLIBLE ---
-  onProgress?.(85, 'Extraction experte des rubriques...');
-  return parseCVText(extractedRawText || file.name);
+  // --- ÉTAPE 3 : ANALYSE EXPERTE LOCALE INFAILLIBLE ---
+  onProgress?.(85, 'Structuration intelligente des coordonnées et rubriques...');
+  const localResult = parseCVText(extractedRawText || file.name);
+  onProgress?.(100, 'CV analysé avec succès !');
+  return localResult;
 }
 
 const MONTHS_PATTERN = '(?:Janvier|F[ée]vrier|Mars|Avril|Mai|Juin|Juillet|Ao[uû]t|Septembre|Octobre|Novembre|D[ée]cembre|Jan|F[ée]v|Mar|Avr|Mai|Juin|Juil|Ao[uû]|Sep|Oct|Nov|D[ée]c)';
@@ -757,10 +805,11 @@ export function parseCVText(rawText: string): ParseResult {
     return buildResultFromFullCV(embeddedInText, 'Texte copié CV Pro Bénin');
   }
 
-  // Nettoyage préalable des ruptures de lignes pour liens coupés par OCR
-  const normalizedRaw = rawText
-    .replace(/(linkedin\.com\/in\/[a-zA-Z0-9_-]+)-\s*\r?\n\s*([a-zA-Z0-9_/-]+)/gi, '$1$2')
-    .replace(/([a-zA-Z0-9.-]+\.[a-zA-Z]{2,4})\s*\r?\n\s*([a-zA-Z0-9_/-]+)/gi, '$1/$2');
+  // Nettoyage préalable des artefacts OCR et ruptures de lignes pour liens coupés
+  const sanitizedInput = cleanOcrArtifacts(rawText);
+  const normalizedRaw = sanitizedInput
+    .replace(/(linkedin\.com\/in\/[a-zA-Z0-9_-]+)[\s\r\n]+(?:[I|®©&•\-\*«»\s]*)([a-zA-Z0-9_/-]+)/gi, '$1-$2')
+    .replace(/([a-zA-Z0-9.-]+\.[a-zA-Z]{2,4})[\s\r\n]+(?:[I|®©&•\-\*«»\s]*)([a-zA-Z0-9_/-]+)/gi, '$1/$2');
 
   const lines = normalizedRaw
     .split(/\r?\n/)
@@ -794,6 +843,8 @@ export function parseCVText(rawText: string): ParseResult {
     const digitsOnly = phone.replace(/\D/g, '');
     if (digitsOnly.length === 10 && digitsOnly.startsWith('01')) {
       phone = `${digitsOnly.slice(0, 2)} ${digitsOnly.slice(2, 4)} ${digitsOnly.slice(4, 6)} ${digitsOnly.slice(6, 8)} ${digitsOnly.slice(8, 10)}`;
+    } else if (digitsOnly.length === 8) {
+      phone = `01 ${digitsOnly.slice(0, 2)} ${digitsOnly.slice(2, 4)} ${digitsOnly.slice(4, 6)} ${digitsOnly.slice(6, 8)}`;
     } else if (digitsOnly.length === 12 && digitsOnly.startsWith('229')) {
       phone = `+229 ${digitsOnly.slice(3, 5)} ${digitsOnly.slice(5, 7)} ${digitsOnly.slice(7, 9)} ${digitsOnly.slice(9, 11)} ${digitsOnly.slice(11, 13)}`;
     }
@@ -810,8 +861,9 @@ export function parseCVText(rawText: string): ParseResult {
     const afterMatch = normalizedRaw.slice(normalizedRaw.indexOf(lMatch[0]) + lMatch[0].length);
     const nextLineCont = afterMatch.match(/^\s*(?:[^a-zA-Z0-9\n]*[a-zA-Z]?®?\s*)?([a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]*)*)/);
     if (nextLineCont && nextLineCont[1] && !/^(COMPETENCES|LANGUES|CONTACT|FORMATIONS)/i.test(nextLineCont[1])) {
-      slug += nextLineCont[1];
+      slug += '-' + nextLineCont[1].replace(/^[-\s]+/, '');
     }
+    slug = slug.replace(/\/\/+/g, '/').replace(/\/+$/, '');
     linkedIn = `https://www.linkedin.com/in/${slug}`;
   }
   if (linkedIn) detectedFields.push('LinkedIn');
@@ -827,188 +879,7 @@ export function parseCVText(rawText: string): ParseResult {
   }
   if (website) detectedFields.push('Site web / Portfolio');
 
-  // 4. Ville au Bénin (comptage par fréquence d'apparition)
-  let city = 'Cotonou';
-  let foundCity = false;
-  let maxCityCount = 0;
-  for (const c of BENIN_CITIES) {
-    const matches = normalizedRaw.match(new RegExp(`\\b${c}\\b`, 'gi'));
-    if (matches && matches.length > maxCityCount) {
-      maxCityCount = matches.length;
-      city = c;
-      foundCity = true;
-    }
-  }
-  if (foundCity) detectedFields.push('Ville de résidence');
-
-  // 5. Adresse
-  let address = '';
-  const addrMatch = normalizedRaw.match(/Adresse\s*[:\-]\s*([^\n\r]+)/i);
-  if (addrMatch) {
-    address = sanitizeCleanString(addrMatch[1].trim(), 100);
-  } else {
-    for (const l of lines.slice(0, 20)) {
-      if (/^(?:Maison|Quartier|Carr[ée]|Lot|Rue|Zone)\s+[A-Za-z0-9À-ÿ\s.-]+/i.test(l)) {
-        address = sanitizeCleanString(l, 100);
-        break;
-      }
-    }
-  }
-  if (address) detectedFields.push('Adresse');
-
-  // 6. Mots-clés de bruit et étiquettes UI à ignorer pour l'identification de nom
-  const IGNORED_NAME_WORDS = [
-    'curriculum', 'vitae', 'curriculum vitea', 'etat civil', 'état civil',
-    'contact', 'contacts', 'coordonnees', 'coordonnées', 'whatsapp', 'whatsapp direct',
-    'candidat', 'candidat actif', 'imprimer', 'telecharger', 'télécharger',
-    'enregistre', 'enregistré', 'benin', 'bénin', 'france', 'afrique',
-    'maison', 'quartier', 'rue', 'carre', 'carré', 'lot', 'telephone', 'téléphone',
-    'email', 'e-mail', 'ville', 'adresse', 'active', 'menu', 'connexion', 'inscription'
-  ];
-
-  function isIgnoredNameCandidate(str: string): boolean {
-    const norm = normalizeHeader(str);
-    if (norm.length < 3) return true;
-    return IGNORED_NAME_WORDS.some((w) => norm === w || norm.startsWith(w + ' '));
-  }
-
-  function cleanCandidateNameLine(line: string): string {
-    let s = line.trim();
-    s = s.replace(/^[\\\/©®&•\-\*o~|+<>–—»«\s]+/g, '');
-    s = s.replace(/\b([a-z])([A-ZÀ-Ý][a-zà-ÿ]+)\b/g, '$2');
-    return s.trim();
-  }
-
-  // 7. Détection du Nom et Prénom & Titre professionnel
-  let firstName = '';
-  let lastName = '';
-  let jobTitle = '';
-
-  // A. Détection prioritaire par étiquettes explicites (Nom : ..., Prénoms : ...)
-  const nomLabeled = normalizedRaw.match(/(?:^|\n|\r)\s*(?:Nom\s*(?:de\s*famille)?|Nom\s*et\s*pr[ée]noms?)\s*[:\-]\s*([A-Za-zÀ-ÿ\s.'-]+?)(?=\s*(?:Pr[ée]noms?|Date|Sexe|Nationalit[ée]|Situation|Adresse|\n|\r|$))/i);
-  const prenomLabeled = normalizedRaw.match(/(?:^|\n|\r|\s)\s*Pr[ée]noms?\s*[:\-]\s*([A-Za-zÀ-ÿ\s.'-]+?)(?=\s*(?:Date|Sexe|Nationalit[ée]|Situation|Adresse|T[ée]l[ée]phone|E-?mail|\n|\r|$))/i);
-
-  if (nomLabeled && nomLabeled[1].trim() && prenomLabeled && prenomLabeled[1].trim()) {
-    lastName = sanitizeHumanName(nomLabeled[1].trim());
-    firstName = sanitizeHumanName(prenomLabeled[1].trim());
-  }
-
-  // B. Détection pour les CV avec barre latérale copiée (où Nom + Titre se trouvent juste avant "Profil Professionnel")
-  if (!firstName || !lastName) {
-    for (let i = 0; i < lines.length; i++) {
-      const norm = normalizeHeader(lines[i]);
-      if (
-        norm === 'profil professionnel' ||
-        norm === 'experiences professionnelles' ||
-        norm === 'formations academiques' ||
-        norm === 'formations et diplomes'
-      ) {
-        const candidateNameLine = lines[i - 2] && !isIgnoredNameCandidate(lines[i - 2]) ? lines[i - 2] : lines[i - 1];
-        const candidateTitleLine = lines[i - 2] && !isIgnoredNameCandidate(lines[i - 2]) ? lines[i - 1] : '';
-
-        if (
-          candidateNameLine &&
-          !isIgnoredNameCandidate(candidateNameLine) &&
-          !candidateNameLine.includes('@') &&
-          !/[0-9]{4,}/.test(candidateNameLine)
-        ) {
-          const cleanedName = cleanCandidateNameLine(candidateNameLine);
-          const parts = cleanedName.split(/\s+/);
-          if (parts.length >= 2 && parts.length <= 4 && /^[A-Za-zÀ-ÿ\s.'-]+$/.test(cleanedName)) {
-            firstName = sanitizeHumanName(parts[0]);
-            lastName = sanitizeHumanName(parts.slice(1).join(' '));
-            if (candidateTitleLine && !isIgnoredNameCandidate(candidateTitleLine) && !candidateTitleLine.includes('@')) {
-              jobTitle = sanitizeCleanString(candidateTitleLine, 80);
-            }
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // C. Balayage des premières lignes si non encore trouvé
-  if (!firstName || !lastName) {
-    for (let i = 0; i < Math.min(lines.length, 12); i++) {
-      const candidate = lines[i];
-      if (
-        isIgnoredNameCandidate(candidate) ||
-        candidate.includes('@') ||
-        candidate.match(/[0-9]{4,}/) ||
-        candidate.length < 3 ||
-        candidate.length > 50
-      ) {
-        continue;
-      }
-      const cleanedCandidate = cleanCandidateNameLine(candidate);
-      const parts = cleanedCandidate.split(/\s+/);
-      if (parts.length >= 2 && parts.length <= 4 && /^[A-Za-zÀ-ÿ\s.'-]+$/.test(cleanedCandidate)) {
-        firstName = sanitizeHumanName(parts[0]);
-        lastName = sanitizeHumanName(parts.slice(1).join(' '));
-        // Ligne suivante candidate pour le titre
-        const nextLine = lines[i + 1];
-        if (
-          nextLine &&
-          !isIgnoredNameCandidate(nextLine) &&
-          !nextLine.includes('@') &&
-          !/[0-9]{4,}/.test(nextLine) &&
-          nextLine.length > 3 &&
-          nextLine.length < 75
-        ) {
-          jobTitle = sanitizeCleanString(nextLine, 80);
-        }
-        break;
-      }
-    }
-  }
-
-  if (firstName || lastName) {
-    detectedFields.push('Nom et prénom');
-  } else {
-    missingFields.push('Nom et prénom');
-  }
-
-  // D. Détection du Titre professionnel si absent
-  if (!jobTitle) {
-    const specialiteMatch = rawText.match(/Sp[ée]cialit[ée](?:\s*du\s*Dipl[ôo]me)?\s*[:\-]\s*([^\n\r]+)/i);
-    const licenceMatch = rawText.match(/(?:Attestation\s+de\s+)?Licence\s+en\s+([^\n\r]+?)(?:\s+[àa]\s+|$)/i);
-
-    if (specialiteMatch && specialiteMatch[1].trim()) {
-      jobTitle = sanitizeCleanString(specialiteMatch[1].trim(), 80);
-    } else if (licenceMatch && licenceMatch[1].trim()) {
-      jobTitle = sanitizeCleanString(`Spécialiste en ${licenceMatch[1].trim()}`, 80);
-    } else {
-      const titleKeywords = [
-        'ingénieur', 'développeur', 'technicien', 'comptable', 'commercial',
-        'assistant', 'secrétaire', 'directeur', 'responsable', 'consultant',
-        'manager', 'juriste', 'analyste', 'administrateur', 'chef de projet',
-        'coordonnateur', 'maintenance', 'informatique', 'système', 'réseau'
-      ];
-      for (const line of lines.slice(0, 15)) {
-        if (
-          !isIgnoredNameCandidate(line) &&
-          line.length > 4 &&
-          line.length < 75 &&
-          !line.includes('@') &&
-          !line.match(/[0-9]{4,}/) &&
-          line !== `${firstName} ${lastName}`
-        ) {
-          if (titleKeywords.some((k) => new RegExp(`\\b${k}`, 'i').test(line))) {
-            jobTitle = sanitizeCleanString(line, 80);
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  if (jobTitle) {
-    detectedFields.push('Titre professionnel');
-  } else {
-    missingFields.push('Titre professionnel');
-  }
-
-  // 8. Découpage du document par rubriques
+  // 4. Découpage préalable du document par rubriques pour isoler le bloc de contact
   const sectionsContent: Record<string, string[]> = {
     summary: [],
     experiences: [],
@@ -1024,25 +895,9 @@ export function parseCVText(rawText: string): ParseResult {
   };
 
   let currentSection: string | null = null;
-  const fullNameLower = `${firstName} ${lastName}`.trim().toLowerCase();
-
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const norm = normalizeHeader(line);
-
-    // Si on rencontre le bloc principal du candidat (Nom et Prénom), interrompre la section précédente
-    if (
-      fullNameLower &&
-      (line.toLowerCase().includes(fullNameLower) ||
-        (firstName && lastName && line.toLowerCase().includes(firstName.toLowerCase()) && line.toLowerCase().includes(lastName.toLowerCase())))
-    ) {
-      currentSection = null;
-      continue;
-    }
-    if (jobTitle && line.toLowerCase() === jobTitle.toLowerCase()) {
-      currentSection = null;
-      continue;
-    }
 
     let matchedSection: string | null = null;
     for (const [secKey, aliases] of Object.entries(SECTION_ALIASES)) {
@@ -1062,23 +917,270 @@ export function parseCVText(rawText: string): ParseResult {
     }
   }
 
-  // 9. Profil & Résumé
+  // 5. Ville au Bénin (priorité aux coordonnées du bloc contact, puis comptage de fréquence)
+  let city = 'Cotonou';
+  let foundCity = false;
+  const contactText = sectionsContent.contact.join(' ');
+
+  for (const c of BENIN_CITIES) {
+    if (new RegExp(`\\b${c}\\b`, 'i').test(contactText)) {
+      city = c;
+      foundCity = true;
+      break;
+    }
+  }
+
+  if (!foundCity) {
+    let maxCityCount = 0;
+    for (const c of BENIN_CITIES) {
+      const matches = normalizedRaw.match(new RegExp(`\\b${c}\\b`, 'gi'));
+      if (matches && matches.length > maxCityCount) {
+        maxCityCount = matches.length;
+        city = c;
+        foundCity = true;
+      }
+    }
+  }
+  if (foundCity) detectedFields.push('Ville de résidence');
+
+  // 6. Adresse de résidence
+  let address = '';
+  const addrMatch = normalizedRaw.match(/Adresse\s*[:\-]\s*([^\n\r]+)/i);
+  if (addrMatch) {
+    address = sanitizeCleanString(addrMatch[1].trim(), 100);
+  } else if (sectionsContent.contact.length > 0) {
+    for (const cl of sectionsContent.contact) {
+      if (
+        !cl.includes('@') &&
+        !/\d{8,}/.test(cl) &&
+        !cl.includes('linkedin.com') &&
+        !cl.includes('.gd') &&
+        !cl.includes('.com') &&
+        cl.length > 3 &&
+        cl.length < 60
+      ) {
+        const cleanCl = cl.replace(/^[©®&•\-\*o~|+<>–—»«\s]+/g, '').trim();
+        if (cleanCl && !BENIN_CITIES.some(bc => cleanCl.toLowerCase() === bc.toLowerCase() || cleanCl.toLowerCase() === `${bc.toLowerCase()}, bénin`)) {
+          address = cleanCl;
+          break;
+        }
+      }
+    }
+  }
+  if (!address) {
+    for (const l of lines.slice(0, 20)) {
+      if (/^(?:Maison|Quartier|Carr[ée]|Lot|Rue|Zone)\s+[A-Za-z0-9À-ÿ\s.-]+/i.test(l)) {
+        address = sanitizeCleanString(l, 100);
+        break;
+      }
+    }
+  }
+  if (address) detectedFields.push('Adresse');
+
+  // 7. Mots-clés de bruit et étiquettes UI à ignorer pour l'identification de nom
+  const IGNORED_NAME_WORDS = [
+    'curriculum', 'vitae', 'curriculum vitea', 'etat civil', 'état civil',
+    'contact', 'contacts', 'coordonnees', 'coordonnées', 'whatsapp', 'whatsapp direct',
+    'candidat', 'candidat actif', 'imprimer', 'telecharger', 'télécharger',
+    'enregistre', 'enregistré', 'benin', 'bénin', 'france', 'afrique',
+    'maison', 'quartier', 'rue', 'carre', 'carré', 'lot', 'telephone', 'téléphone',
+    'email', 'e-mail', 'ville', 'adresse', 'active', 'menu', 'connexion', 'inscription'
+  ];
+
+  function isIgnoredNameCandidate(str: string): boolean {
+    const norm = normalizeHeader(str);
+    if (norm.length < 3) return true;
+    return IGNORED_NAME_WORDS.some((w) => norm === w || norm.startsWith(w + ' '));
+  }
+
+  function cleanCandidateNameLine(line: string): string {
+    let s = line.trim();
+    // Nettoie les symboles de puces et icônes
+    s = s.replace(/^[\\\/©®&•\-\*o~|+<>–—»«\s]+/g, '');
+    // Nettoie une lettre minuscule errante d'OCR précédant une majuscule (ex: eWaaliyou -> Waaliyou)
+    s = s.replace(/\b([a-z])([A-ZÀ-Ý][a-zà-ÿ]+)\b/g, '$2');
+    return s.trim();
+  }
+
+  // 8. Détection du Nom et Prénom & Titre professionnel
+  let firstName = '';
+  let lastName = '';
+  let jobTitle = '';
+  let nameLineIndex = -1;
+
+  // A. Détection prioritaire par étiquettes explicites (Nom : ..., Prénoms : ...)
+  const nomLabeled = normalizedRaw.match(/(?:^|\n|\r)\s*(?:Nom\s*(?:de\s*famille)?|Nom\s*et\s*pr[ée]noms?)\s*[:\-]\s*([A-Za-zÀ-ÿ\s.'-]+?)(?=\s*(?:Pr[ée]noms?|Date|Sexe|Nationalit[ée]|Situation|Adresse|\n|\r|$))/i);
+  const prenomLabeled = normalizedRaw.match(/(?:^|\n|\r|\s)\s*Pr[ée]noms?\s*[:\-]\s*([A-Za-zÀ-ÿ\s.'-]+?)(?=\s*(?:Date|Sexe|Nationalit[ée]|Situation|Adresse|T[ée]l[ée]phone|E-?mail|\n|\r|$))/i);
+
+  if (nomLabeled && nomLabeled[1].trim() && prenomLabeled && prenomLabeled[1].trim()) {
+    lastName = sanitizeHumanName(nomLabeled[1].trim());
+    firstName = sanitizeHumanName(prenomLabeled[1].trim());
+  }
+
+  // B. Balayage des premières lignes pour repérer le nom du candidat
+  if (!firstName || !lastName) {
+    for (let i = 0; i < Math.min(lines.length, 12); i++) {
+      const candidate = lines[i];
+      if (
+        isIgnoredNameCandidate(candidate) ||
+        candidate.includes('@') ||
+        candidate.match(/[0-9]{4,}/) ||
+        candidate.length < 3 ||
+        candidate.length > 50
+      ) {
+        continue;
+      }
+      const cleanedCandidate = cleanCandidateNameLine(candidate);
+      const parts = cleanedCandidate.split(/\s+/);
+      if (parts.length >= 2 && parts.length <= 4 && /^[A-Za-zÀ-ÿ\s.'-]+$/.test(cleanedCandidate)) {
+        firstName = sanitizeHumanName(parts[0]);
+        lastName = sanitizeHumanName(parts.slice(1).join(' '));
+        nameLineIndex = i;
+        break;
+      }
+    }
+  }
+
+  if (firstName || lastName) {
+    detectedFields.push('Nom et prénom');
+  } else {
+    missingFields.push('Nom et prénom');
+  }
+
+  // C. Détection et rassemblement multi-lignes du Titre Professionnel
+  if (nameLineIndex >= 0) {
+    const candidateTitleLines: string[] = [];
+    for (let k = nameLineIndex + 1; k < Math.min(lines.length, nameLineIndex + 5); k++) {
+      const l = lines[k];
+      const normL = normalizeHeader(l);
+      // Arrêt immédiat si on rencontre un en-tête de rubrique ou un contact
+      const isHeader = Object.values(SECTION_ALIASES).some(aliases => aliases.some(a => normL === a || normL.startsWith(a)));
+      if (isHeader || l.includes('@') || /^\d{4}/.test(l) || isIgnoredNameCandidate(l)) {
+        break;
+      }
+      if (l.length >= 3 && l.length < 90) {
+        candidateTitleLines.push(l.replace(/^[•\-\*|~]+\s*/, '').trim());
+      }
+    }
+
+    if (candidateTitleLines.length > 0) {
+      let mergedTitle = '';
+      for (const linePart of candidateTitleLines) {
+        if (!mergedTitle) {
+          mergedTitle = linePart;
+        } else if (/[|&/\-–]$/.test(mergedTitle) || /^[|&/\-–]/.test(linePart)) {
+          mergedTitle = `${mergedTitle.replace(/[|&/\-–\s]+$/, '')} | ${linePart.replace(/^[|&/\-–\s]+/, '')}`.trim();
+        } else if (/(?:en|et|de|du|des|d'|d’|pour|par)$/i.test(mergedTitle) || /^(?:informatique|maintenance|logiciel|système|réseau|gestion|web|mobile)\b/i.test(linePart)) {
+          mergedTitle = `${mergedTitle} ${linePart}`;
+        } else {
+          mergedTitle = `${mergedTitle} | ${linePart}`;
+        }
+      }
+      jobTitle = sanitizeCleanString(mergedTitle, 120);
+    }
+  }
+
+  // Repli pour le titre professionnel si non trouvé
+  if (!jobTitle) {
+    const specialiteMatch = rawText.match(/Sp[ée]cialit[ée](?:\s*du\s*Dipl[ôo]me)?\s*[:\-]\s*([^\n\r]+)/i);
+    const licenceMatch = rawText.match(/(?:Attestation\s+de\s+)?Licence\s+en\s+([^\n\r]+?)(?:\s+[àa]\s+|$)/i);
+
+    if (specialiteMatch && specialiteMatch[1].trim()) {
+      jobTitle = sanitizeCleanString(specialiteMatch[1].trim(), 80);
+    } else if (licenceMatch && licenceMatch[1].trim()) {
+      jobTitle = sanitizeCleanString(`Spécialiste en ${licenceMatch[1].trim()}`, 80);
+    } else {
+      const titleKeywords = [
+        'ingénieur', 'développeur', 'technicien', 'comptable', 'commercial',
+        'assistant', 'secrétaire', 'directeur', 'responsable', 'consultant',
+        'manager', 'juriste', 'analyste', 'administrateur', 'chef de projet',
+        'coordonnateur', 'maintenance', 'informatique', 'système', 'réseau'
+      ];
+      for (const line of lines.slice(0, 15)) {
+        if (
+          !isIgnoredNameCandidate(line) &&
+          line.length > 4 &&
+          line.length < 85 &&
+          !line.includes('@') &&
+          !line.match(/[0-9]{4,}/) &&
+          line !== `${firstName} ${lastName}`
+        ) {
+          if (titleKeywords.some((k) => new RegExp(`\\b${k}`, 'i').test(line))) {
+            jobTitle = sanitizeCleanString(line, 80);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (jobTitle) {
+    detectedFields.push('Titre professionnel');
+  } else {
+    missingFields.push('Titre professionnel');
+  }
+
+  // 9. Profil & Résumé complet (conservation intégrale sans coupure)
   let profileSummary = '';
   if (sectionsContent.summary.length > 0) {
-    profileSummary = sectionsContent.summary.slice(0, 5).join(' ').trim();
-    if (profileSummary.length > 20) {
+    const fullSummary = sectionsContent.summary.join(' ').replace(/\s+/g, ' ').trim();
+    if (fullSummary.length > 15) {
+      profileSummary = fullSummary.slice(0, 1600);
       detectedFields.push('Profil & Résumé');
     }
   }
 
-  // 10. Compétences (Ligne par ligne + extraction des outils entre parenthèses)
+  // 10. Compétences (avec fusion des lignes coupées, nettoyage et catégorisation experte)
   const skills: Skill[] = [];
   const rawSkillPool = sectionsContent.skills;
-  for (const line of rawSkillPool) {
+
+  // Fusion préalable des lignes coupées par saut de colonne
+  const mergedSkillLines: string[] = [];
+  for (let k = 0; k < rawSkillPool.length; k++) {
+    let curr = rawSkillPool[k].trim();
+    while (
+      k + 1 < rawSkillPool.length &&
+      (/(?:de|des|en|et|d’|d'|du|la|le|les)\s*$/i.test(curr) ||
+       /^(?:sites|applications|logiciels|ordinateurs|téléphones|intelligence|prompt)\b/i.test(rawSkillPool[k + 1].trim()))
+    ) {
+      curr += ' ' + rawSkillPool[k + 1].trim();
+      k++;
+    }
+    mergedSkillLines.push(curr);
+  }
+
+  function addSkillItem(nameRaw: string) {
+    const cleanName = nameRaw.trim();
+    if (cleanName.length < 2 || cleanName.length > 65) return;
+    const norm = cleanName.toLowerCase();
+    if (skills.some((s) => s.name.toLowerCase() === norm)) return;
+
+    let category: Skill['category'] = 'transverse';
+    if (/html|css|javascript|typescript|php|node|python|web|react|vue|angular|full\s*stack|sql|api|dev/i.test(norm)) {
+      category = 'dev_web';
+    } else if (/word|excel|powerpoint|bureautique|office|tableur/i.test(norm)) {
+      category = 'bureautique';
+    } else if (/maintenance|dépannage|reparation|ordinateur|réseau|materiel|diagnostic|installation/i.test(norm)) {
+      category = 'maintenance';
+    } else if (/photoshop|premiere|illustrator|canva|capcut|design|communication|graphisme/i.test(norm)) {
+      category = 'communication';
+    } else if (/gestion|comptabil|projet|management/i.test(norm)) {
+      category = 'gestion';
+    }
+
+    skills.push({
+      id: `sk_h_${Date.now()}_${skills.length}`,
+      name: cleanName.charAt(0).toUpperCase() + cleanName.slice(1),
+      category,
+      level: 4
+    });
+  }
+
+  for (const line of mergedSkillLines) {
     const cleanL = line.replace(/^[\s•\-\*o\d.:)\-]+/gi, '').trim();
     if (!cleanL || cleanL.length < 2) continue;
 
-    // Détection des outils logiciels entre parenthèses : (WORD, EXCEL, ...)
+    // Détection des outils entre parenthèses : (WORD, EXCEL, ...)
     const parenMatch = cleanL.match(/\(([^)]+)\)/);
     if (parenMatch) {
       const tools = parenMatch[1]
@@ -1087,16 +1189,10 @@ export function parseCVText(rawText: string): ParseResult {
         .filter((t) => t.length > 1 && t.length < 40);
 
       for (const tool of tools) {
-        skills.push({
-          id: `sk_h_${Date.now()}_${skills.length}`,
-          name: tool,
-          category: 'dev_web',
-          level: 4
-        });
+        addSkillItem(tool);
       }
     }
 
-    // Compétence nettoyée sans les parenthèses
     const stripped = cleanL
       .replace(/\(.*?\)/g, '')
       .replace(/^Ma[îi]trise\s+(?:tr[èe]s\s+bien\s+)?(?:l[’']|de\s+|des\s+|du\s+)?/gi, '')
@@ -1107,23 +1203,13 @@ export function parseCVText(rawText: string): ParseResult {
       const subItems = stripped
         .split(/[,;•]/)
         .map((s) => s.trim())
-        .filter((s) => s.length > 1 && s.length < 45);
+        .filter((s) => s.length > 1 && s.length < 50);
 
       for (const s of subItems) {
-        skills.push({
-          id: `sk_h_${Date.now()}_${skills.length}`,
-          name: s.charAt(0).toUpperCase() + s.slice(1),
-          category: 'informatique',
-          level: 4
-        });
+        addSkillItem(s);
       }
-    } else if (stripped.length > 1 && stripped.length < 45) {
-      skills.push({
-        id: `sk_h_${Date.now()}_${skills.length}`,
-        name: stripped.charAt(0).toUpperCase() + stripped.slice(1),
-        category: 'informatique',
-        level: 4
-      });
+    } else if (stripped.length > 1 && stripped.length < 65) {
+      addSkillItem(stripped);
     }
   }
 
@@ -1131,9 +1217,10 @@ export function parseCVText(rawText: string): ParseResult {
     detectedFields.push(`Compétences (${skills.length})`);
   }
 
-  // 11. Langues (Prise en compte de "Langue : Niveau" et "Langue" suivi de "Niveau" sur la ligne suivante)
+  // 11. Langues (Prise en charge directe des formats inline : "Français Professionnel", "Anglais Intermédiaire", "Dendi Courant")
   const languages: Language[] = [];
   const langLines = sectionsContent.languages;
+
   for (let i = 0; i < langLines.length; i++) {
     const rawLang = langLines[i].replace(/^[\s•\-\*o\d.:)\-]+/gi, '').trim();
     if (!rawLang || rawLang.length < 2) continue;
@@ -1141,7 +1228,12 @@ export function parseCVText(rawText: string): ParseResult {
     let langName = '';
     let levelStr = '';
 
-    if (rawLang.includes(':') || rawLang.includes(' - ')) {
+    // Format sans séparateur explicite (ex: "Français Professionnel", "Anglais Intermediaire", "Dendi Courant")
+    const inlineMatch = rawLang.match(/^([A-Za-zÀ-ÿ\s'-]+?)\s+(professionnel|courant|interm[ée]diaire|notions?|maternelle|bilingue|natif|d[ée]butant|moyen|fluide|tr[èe]s\s+bien|bien|passable)$/i);
+    if (inlineMatch && inlineMatch[1].trim().length >= 2) {
+      langName = inlineMatch[1].trim();
+      levelStr = inlineMatch[2].trim().toLowerCase();
+    } else if (rawLang.includes(':') || rawLang.includes(' - ')) {
       const parts = rawLang.split(/[:\-]/);
       langName = parts[0].trim();
       levelStr = (parts[1] || '').trim().toLowerCase();

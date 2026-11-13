@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
+import { parseCVText } from './src/services/documentParser.ts';
 
 dotenv.config();
 
@@ -17,8 +18,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-// En conformité avec AI Studio, le serveur écoute exclusivement sur le port 3000
-const port = 3000;
+// En conformité avec AI Studio, le serveur écoute sur le port 3000 (ou PORT env)
+const port = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -1509,8 +1510,7 @@ async function runOcrOnPdfBuffer(pdfBuffer: Buffer): Promise<string> {
 
   let ocrWorker: any = null;
   try {
-    const tesseractMod = await import('tesseract.js');
-    const Tesseract = tesseractMod.default || tesseractMod;
+    const { default: Tesseract } = await import('tesseract.js');
     ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
     let combinedText = '';
 
@@ -1562,6 +1562,7 @@ app.post('/api/cv/extract-text', async (req, res) => {
     const nameLower = (fileName || '').toLowerCase();
     const isPDF = mimeType === 'application/pdf' || nameLower.endsWith('.pdf');
     const isDOCX = nameLower.endsWith('.docx') || nameLower.endsWith('.doc') || (mimeType && mimeType.includes('word'));
+    const isImage = mimeType?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(nameLower);
 
     let extractedText = '';
 
@@ -1588,14 +1589,26 @@ app.post('/api/cv/extract-text', async (req, res) => {
       }
     } else if (isDOCX) {
       try {
-        const mammothMod = await import('mammoth');
-        const mammoth = mammothMod.default || mammothMod;
+        const mammoth = await import('mammoth');
         const docResult = await mammoth.extractRawText({ buffer });
         if (docResult && docResult.value) {
           extractedText = docResult.value.trim();
         }
       } catch (mErr) {
         console.warn('[DOCX Mammoth Server Warning]', mErr);
+      }
+    } else if (isImage) {
+      try {
+        console.log('[Server] Fichier image détecté dans extract-text, lancement OCR Tesseract...');
+        const { default: Tesseract } = await import('tesseract.js');
+        const ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
+        const resImg = await ocrWorker.recognize(buffer);
+        await ocrWorker.terminate();
+        if (resImg?.data?.text) {
+          extractedText = resImg.data.text.trim();
+        }
+      } catch (imgErr) {
+        console.warn('[Server Image OCR Warning]', imgErr);
       }
     } else {
       extractedText = buffer.toString('utf-8');
@@ -1614,78 +1627,72 @@ app.post('/api/cv/extract-text', async (req, res) => {
   }
 });
 
-// 4. Analyse et extraction intelligente de CV (PDF, DOCX, TXT)
+// 4. Analyse et extraction intelligente de CV (PDF, DOCX, TXT, Images) avec repli infaillible
 app.post('/api/cv/parse', async (req, res) => {
   const { fileBase64, mimeType, fileName, rawText } = req.body;
   let docText = rawText || '';
 
-  // Extraction PDF propre via PDFParse côté serveur si non fournie
-  if ((!docText || docText.length < 50) && fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
+  // 1. Extraction si le texte n'a pas été préalablement extrait
+  if ((!docText || docText.length < 40) && fileBase64) {
+    const nameLower = (fileName || '').toLowerCase();
+    const isPDF = mimeType === 'application/pdf' || nameLower.endsWith('.pdf');
+    const isDOCX = nameLower.endsWith('.docx') || nameLower.endsWith('.doc') || (mimeType && mimeType.includes('word'));
+    const isImage = mimeType?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(nameLower);
+
     try {
       const buffer = Buffer.from(fileBase64, 'base64');
-      try {
-        const { PDFParse } = await import('pdf-parse');
-        const parser = new PDFParse({ data: buffer });
-        const result = await parser.getText();
-        if (result && result.text) {
-          docText = result.text.trim();
+      if (isPDF) {
+        try {
+          const { PDFParse } = await import('pdf-parse');
+          const parser = new PDFParse({ data: buffer });
+          const result = await parser.getText();
+          if (result && result.text) {
+            docText = result.text.trim();
+          }
+        } catch (pErr) {
+          console.warn('[Server PDFParse during parse error]', pErr);
         }
-      } catch (pdfErr) {
-        console.warn('[Server PDFParse during parse warning]', pdfErr);
-      }
-      const isMinimalOrPageNumberOnly = !docText || docText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(docText.replace(/\s+/g, ' ').trim());
-      if (isMinimalOrPageNumberOnly) {
-        console.log('[Server] Document PDF matriciel dans /api/cv/parse, lancement OCR Tesseract...');
-        const ocrText = await runOcrOnPdfBuffer(buffer);
-        if (ocrText && ocrText.length > 20) {
-          docText = ocrText;
+
+        const isMinimal = !docText || docText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(docText.replace(/\s+/g, ' ').trim());
+        if (isMinimal) {
+          console.log('[Server] Document PDF matriciel dans /api/cv/parse, lancement OCR Tesseract...');
+          const ocrText = await runOcrOnPdfBuffer(buffer);
+          if (ocrText && ocrText.length > 20) {
+            docText = ocrText;
+          }
         }
+      } else if (isDOCX) {
+        const mammoth = await import('mammoth');
+        const docResult = await mammoth.extractRawText({ buffer });
+        if (docResult?.value) {
+          docText = docResult.value.trim();
+        }
+      } else if (isImage) {
+        console.log('[Server] Fichier image détecté dans /api/cv/parse, lancement OCR Tesseract...');
+        const { default: Tesseract } = await import('tesseract.js');
+        const ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
+        const resImg = await ocrWorker.recognize(buffer);
+        await ocrWorker.terminate();
+        if (resImg?.data?.text) {
+          docText = resImg.data.text.trim();
+        }
+      } else {
+        docText = buffer.toString('utf-8');
       }
-    } catch (pErr) {
-      console.warn('[Server PDFParse during parse error]', pErr);
-    }
-  } else if ((!docText || docText.length < 20) && fileBase64 && (fileName?.toLowerCase().endsWith('.docx') || fileName?.toLowerCase().endsWith('.doc'))) {
-    try {
-      const buffer = Buffer.from(fileBase64, 'base64');
-      const mammothMod = await import('mammoth');
-      const mammoth = mammothMod.default || mammothMod;
-      const docResult = await mammoth.extractRawText({ buffer });
-      if (docResult.value) {
-        docText = docResult.value.trim();
-      }
-    } catch (mErr) {
-      console.warn('[Server Mammoth during parse error]', mErr);
+    } catch (parseExtractErr) {
+      console.warn('[Server text extraction error in /api/cv/parse]', parseExtractErr);
     }
   }
 
+  // 2. Tentative avec Gemini IA si disponible avec un délai d'attente court (max 5s)
   const client = getAiClient();
+  let parsedJson: any = null;
 
-  if (!client) {
-    return res.json({
-      success: true,
-      isAI: false,
-      rawText: docText,
-      message: 'Extraction textuelle directe effectuée avec succès.'
-    });
-  }
-
-  try {
-    const systemPrompt = `Tu es le moteur expert d'analyse et d'extraction de CV de "CV Pro Bénin".
-Ta mission est d'extraire fidèlement, précisément et intégralement toutes les données de ce document de CV pour pré-remplir le constructeur de CV professionnel.
-
-Consignes strictes :
-1. N'extrais JAMAIS de code binaire, d'en-têtes de fichier comme "%PDF", "obj", "endobj", "<<", ">>", "stream", etc.
-2. Identifie le vrai Nom et Prénom du candidat (ex: pour "Boris Fabrice Maud DOSSOUVI" -> firstName: "Boris Fabrice Maud", lastName: "DOSSOUVI").
-3. Extrais l'intitulé de poste exact (ex: "Ingénieur Informaticien" ou "Développeur Web & Mobile").
-4. Extrais les coordonnées réelles (téléphone béninois ou international, email, ville, adresse, site web, linkedin).
-5. Extrais toutes les expériences professionnelles avec dates, entreprise, ville, rôle, description et réalisations.
-6. Extrais toutes les formations et diplômes avec établissement, année, filière et mention.
-7. Extrais toutes les compétences techniques et transversales avec catégorie (dev_web, bureautique, gestion, vente, maintenance, transverse).
-8. Extrais les langues avec niveau de maîtrise (ex: Langue maternelle, Bilingue / Courant, Professionnel, etc.).
-9. Extrais les certifications et centres d'intérêt.
-10. Renvoie EXCLUSIVEMENT un objet JSON valide conforme au schéma ci-dessous, sans texte avant ni après.
-
-Format JSON attendu :
+  if (client && docText && docText.length >= 30) {
+    try {
+      const systemPrompt = `Tu es le moteur expert d'analyse et d'extraction de CV de "CV Pro Bénin".
+Extrais fidèlement, précisément et intégralement toutes les données de ce document de CV pour pré-remplir le constructeur de CV professionnel.
+N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide conforme au schéma suivant :
 {
   "personalInfo": {
     "firstName": "string",
@@ -1739,110 +1746,61 @@ Format JSON attendu :
       "level": "string"
     }
   ],
-  "customSections": [
-    {
-      "id": "sec_certifs",
-      "title": "Certifications & Formations",
-      "items": [
-        {
-          "id": "item_1",
-          "title": "string",
-          "subtitle": "string",
-          "date": "string",
-          "description": "string"
-        }
-      ]
-    }
-  ],
+  "customSections": [],
   "hobbies": ["string"]
 }`;
 
-    if (!docText && fileBase64 && (fileName?.toLowerCase().endsWith('.docx') || fileName?.toLowerCase().endsWith('.doc'))) {
-      try {
-        const buffer = Buffer.from(fileBase64, 'base64');
-        const mammothMod = await import('mammoth');
-        const mammoth = mammothMod.default || mammothMod;
-        const docResult = await mammoth.extractRawText({ buffer });
-        if (docResult.value) {
-          docText = docResult.value;
-        }
-      } catch (mErr) {
-        console.warn('[DOCX Mammoth Server Error]', mErr);
-      }
-    }
-
-    let contents: any[] = [];
-    if (docText && docText.length >= 30) {
-      contents = [
-        { text: `${systemPrompt}\n\nVoici le contenu textuel extrait du document de CV à analyser fidèlement :\n\n${docText}` }
-      ];
-    } else if (fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))) {
-      contents = [
-        {
-          inlineData: {
-            mimeType: 'application/pdf',
-            data: fileBase64
+      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest'];
+      for (const model of candidateModels) {
+        try {
+          const response = await callWithTimeout(
+            () =>
+              client.models.generateContent({
+                model,
+                contents: [
+                  { text: `${systemPrompt}\n\nVoici le contenu textuel extrait du CV à analyser fidèlement :\n\n${docText}` }
+                ],
+                config: {
+                  responseMimeType: 'application/json'
+                }
+              }),
+            5000 // 5 secondes max
+          );
+          if (response?.text) {
+            parsedJson = JSON.parse(response.text.trim());
+            break;
           }
-        },
-        { text: systemPrompt }
-      ];
-    } else {
-      contents = [
-        { text: `${systemPrompt}\n\nVoici le contenu du CV à analyser :\n\n${docText || fileBase64 || ''}` }
-      ];
-    }
-
-    let parsedJson: any = null;
-    const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest'];
-    let lastErr: any = null;
-
-    for (const model of candidateModels) {
-      try {
-        const response = await callWithTimeout(
-          () =>
-            client.models.generateContent({
-              model,
-              contents,
-              config: {
-                responseMimeType: 'application/json'
-              }
-            }),
-          30000
-        );
-        if (response.text) {
-          parsedJson = JSON.parse(response.text.trim());
-          break;
+        } catch (err: any) {
+          console.warn(`[Gemini API CV Parse] Échec sur ${model} (${err?.message || 'délai'}), essai suivant...`);
         }
-      } catch (err: any) {
-        lastErr = err;
-        console.warn(`[Gemini API CV Parse] Échec sur ${model}, bascule sur modèle suivant`, err?.message || err);
       }
+    } catch (aiErr) {
+      console.warn('[Gemini API global error in /api/cv/parse]', aiErr);
     }
+  }
 
-    if (!parsedJson) {
-      console.warn('[Gemini API CV Parse] Bascule immédiate vers le moteur heuristique avec le texte extrait:', lastErr?.message || 'Pas de JSON');
-      return res.json({
-        success: true,
-        isAI: false,
-        rawText: docText,
-        message: 'Extraction textuelle directe effectuée avec succès.'
-      });
-    }
-
-    res.json({
+  // Si Gemini a produit un résultat structuré valide
+  if (parsedJson && (parsedJson.personalInfo || parsedJson.experiences || parsedJson.educations)) {
+    return res.json({
       success: true,
-      data: parsedJson || {},
+      isAI: true,
+      data: parsedJson,
       rawText: docText
     });
-  } catch (err: any) {
-    console.error('Erreur extraction CV IA, repli heuristique automatique:', err);
-    res.json({
-      success: true,
-      isAI: false,
-      rawText: docText,
-      message: 'Extraction textuelle directe effectuée avec succès.'
-    });
   }
+
+  // 3. REPLI INFAILLIBLE : Analyse heuristique experte locale (toujours disponible et ultra-rapide)
+  console.log('[Server] Exécution de l\'analyse experte locale infaillible...');
+  const parseResult = parseCVText(docText || fileName || '');
+  return res.json({
+    success: true,
+    isAI: false,
+    data: parseResult.cvData,
+    detectedFields: parseResult.detectedFields,
+    warnings: parseResult.warnings,
+    rawText: docText,
+    message: 'Analyse et structuration experte du CV effectuées avec succès.'
+  });
 });
 
 // 3. Webhook pour notifications serveur-à-serveur Mobile Money (MTN / Moov / FedaPay)
@@ -1888,4 +1846,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('[CV Pro Bénin] Échec critique au démarrage du serveur:', err);
+  process.exit(1);
+});
