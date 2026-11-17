@@ -192,6 +192,76 @@ export const INITIAL_DEMO_CV: CVData = {
   updatedAt: '2026-10-24T12:00:00.000Z'
 };
 
+export function createBlankCV(userId?: string): CVData {
+  const now = new Date().toISOString();
+  return {
+    id: 'cv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    userId,
+    title: 'Mon Nouveau CV',
+    personalInfo: {
+      firstName: '',
+      lastName: '',
+      jobTitle: '',
+      email: '',
+      phone: '',
+      city: 'Cotonou',
+      country: 'Bénin',
+      address: '',
+      linkedIn: '',
+      website: '',
+      nationality: ''
+    },
+    profileSummary: '',
+    experiences: [],
+    educations: [],
+    skills: [],
+    languages: [{ id: 'lang_fr', name: 'Français', level: 'courant' }],
+    customSections: [
+      {
+        id: 'sec_certifs',
+        title: 'Certifications Professionnelles',
+        type: 'certifications',
+        enabled: false,
+        items: []
+      },
+      {
+        id: 'sec_projets',
+        title: 'Projets Notables',
+        type: 'projets',
+        enabled: false,
+        items: []
+      },
+      {
+        id: 'sec_loisirs',
+        title: 'Centres d’intérêt',
+        type: 'loisirs',
+        enabled: false,
+        items: []
+      }
+    ],
+    settings: {
+      templateId: 'moderne',
+      primaryColor: '#047857',
+      fontFamily: 'Inter',
+      fontSize: 'normal',
+      showPhoto: false,
+      margins: 'normal',
+      sectionOrder: [
+        'profil',
+        'experiences',
+        'educations',
+        'skills',
+        'languages',
+        'certifications',
+        'projets',
+        'loisirs'
+      ]
+    },
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 export const INITIAL_USER: UserProfile = {
   id: 'user_benin_demo',
   email: 'candidat.benin@gmail.com',
@@ -255,17 +325,36 @@ class StorageService {
     }
   }
 
+  getAuthToken(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('cv_benin_auth_token');
+  }
+
+  getAuthHeaders(withJson = true): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (withJson) headers['Content-Type'] = 'application/json';
+    const token = this.getAuthToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  }
+
   // --- Auth & Profile ---
   getCurrentUser(): UserProfile | null {
-    return this.getItem<UserProfile | null>('current_user', INITIAL_USER);
+    if (typeof window === 'undefined') return null;
+    const token = this.getAuthToken();
+    if (!token) return null;
+    return this.getItem<UserProfile | null>('current_user', null);
   }
 
   setCurrentUser(user: UserProfile | null): void {
     this.setItem('current_user', user);
+    if (!user && typeof window !== 'undefined') {
+      localStorage.removeItem('cv_benin_auth_token');
+    }
   }
 
   getUsers(): UserProfile[] {
-    return this.getItem<UserProfile[]>('users_list', [INITIAL_USER, INITIAL_ADMIN]);
+    return this.getItem<UserProfile[]>('users_list', []);
   }
 
   saveUser(user: UserProfile): void {
@@ -379,95 +468,77 @@ class StorageService {
     const current = this.getCurrentUser();
     if (!current) return { success: false, error: 'Non authentifié.' };
 
-    const token = localStorage.getItem('cv_pro_auth_token');
-    if (token) {
-      try {
-        const res = await fetch('/api/auth/profile', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify(data)
-        });
-        const resData = await res.json();
-        if (resData.success && resData.user) {
-          this.setCurrentUser(resData.user);
-          this.saveUser(resData.user);
-          return { success: true, user: resData.user };
-        }
-      } catch (e) {
-        console.warn('API profile update fallback local', e);
-      }
-    }
+    const token = this.getAuthToken();
+    if (!token) return { success: false, error: 'Session expirée. Veuillez vous reconnecter.' };
 
-    // Local fallback
-    if (data.firstName) current.firstName = data.firstName.trim();
-    if (data.lastName) current.lastName = data.lastName.trim();
-    if (data.phoneNumber !== undefined) current.phoneNumber = data.phoneNumber.trim();
-    current.updatedAt = new Date().toISOString();
-    this.saveUser(current);
-    this.setCurrentUser(current);
-    return { success: true, user: current };
+    try {
+      const res = await fetch('/api/auth/profile', {
+        method: 'POST',
+        headers: this.getAuthHeaders(true),
+        body: JSON.stringify(data)
+      });
+      const resData = await res.json();
+      if (res.ok && resData.success && resData.user) {
+        this.setCurrentUser(resData.user);
+        this.saveUser(resData.user);
+        return { success: true, user: resData.user };
+      }
+      return { success: false, error: resData.error || 'Erreur lors de la mise à jour du profil.' };
+    } catch {
+      return { success: false, error: 'Serveur inaccessible. Vérifiez votre connexion.' };
+    }
   }
 
   async changeMyPassword(
     currentPassword: string,
     newPassword: string
   ): Promise<{ success: boolean; message?: string; error?: string }> {
-    const token = localStorage.getItem('cv_pro_auth_token');
-    if (token) {
-      try {
-        const res = await fetch('/api/auth/change-password', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify({ currentPassword, newPassword })
-        });
-        const resData = await res.json();
-        if (!res.ok || !resData.success) {
-          return { success: false, error: resData.error || 'Erreur lors du changement de mot de passe.' };
-        }
-        return { success: true, message: resData.message || 'Mot de passe modifié.' };
-      } catch (e) {
-        return { success: false, error: 'Impossible de contacter le serveur de sécurité.' };
-      }
+    const token = this.getAuthToken();
+    if (!token) {
+      return { success: false, error: 'Session expirée. Veuillez vous reconnecter.' };
     }
-    return { success: true, message: 'Mot de passe mis à jour.' };
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: this.getAuthHeaders(true),
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.success) {
+        return { success: false, error: resData.error || 'Erreur lors du changement de mot de passe.' };
+      }
+      return { success: true, message: resData.message || 'Mot de passe modifié.' };
+    } catch {
+      return { success: false, error: 'Impossible de contacter le serveur de sécurité.' };
+    }
   }
 
   async deleteMyAccount(): Promise<{ success: boolean; error?: string }> {
     const current = this.getCurrentUser();
     if (!current) return { success: false, error: 'Non connecté.' };
 
-    const token = localStorage.getItem('cv_pro_auth_token');
-    if (token) {
-      try {
-        const res = await fetch('/api/auth/delete-account', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          }
-        });
-        const resData = await res.json();
-        if (!res.ok || !resData.success) {
-          return { success: false, error: resData.error || 'Erreur lors de la suppression.' };
-        }
-      } catch (e) {
-        console.warn('Fallback suppression locale', e);
+    const token = this.getAuthToken();
+    if (!token) {
+      return { success: false, error: 'Session expirée. Veuillez vous reconnecter.' };
+    }
+    try {
+      const res = await fetch('/api/auth/delete-account', {
+        method: 'POST',
+        headers: this.getAuthHeaders(true)
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.success) {
+        return { success: false, error: resData.error || 'Erreur lors de la suppression.' };
       }
+    } catch {
+      return { success: false, error: 'Impossible de contacter le serveur pour supprimer le compte.' };
     }
 
-    // Effacement local
     const cvs = this.getCVs().filter((c) => c.userId !== current.id);
     this.setItem('cvs', cvs);
-    let users = this.getUsers().filter((u) => u.id !== current.id);
+    const users = this.getUsers().filter((u) => u.id !== current.id);
     this.setItem('users_list', users);
     this.setCurrentUser(null);
-    localStorage.removeItem('cv_pro_auth_token');
     return { success: true };
   }
 
@@ -554,7 +625,7 @@ class StorageService {
   }
 
   getCVs(userId?: string): CVData[] {
-    const raw = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
+    const raw = this.getItem<CVData[]>('cvs', []);
     const all = raw.map((c) => this.cleanCorruptedCV(c));
     if (!userId) return all;
     return all.filter((c) => c.userId === userId);
@@ -573,7 +644,7 @@ class StorageService {
   }
 
   saveCV(cv: CVData): CVData {
-    const all = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
+    const all = this.getItem<CVData[]>('cvs', []);
     const updated = {
       ...cv,
       updatedAt: new Date().toISOString()
@@ -586,25 +657,73 @@ class StorageService {
     }
     this.setItem('cvs', all);
 
-    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    if (typeof window !== 'undefined' && typeof fetch === 'function' && this.getAuthToken()) {
       fetch('/api/cvs', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAuthHeaders(true),
         body: JSON.stringify(updated)
-      }).catch(() => {});
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.cv) {
+              const latest = this.getItem<CVData[]>('cvs', []);
+              const idx = latest.findIndex((c) => c.id === data.cv.id);
+              if (idx >= 0) latest[idx] = data.cv;
+              else latest.unshift(data.cv);
+              this.setItem('cvs', latest);
+            }
+          }
+        })
+        .catch(() => {});
     }
 
     return updated;
   }
 
+  async saveCVToServer(cv: CVData): Promise<{ success: boolean; cv?: CVData; error?: string; code?: string }> {
+    const updated = {
+      ...cv,
+      updatedAt: new Date().toISOString()
+    };
+    const token = this.getAuthToken();
+    if (!token) {
+      return { success: true, cv: this.saveCV(updated) };
+    }
+    try {
+      const res = await fetch('/api/cvs', {
+        method: 'POST',
+        headers: this.getAuthHeaders(true),
+        body: JSON.stringify(updated)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return {
+          success: false,
+          code: data.code,
+          error: data.error || 'Sauvegarde refusée par le serveur.'
+        };
+      }
+      const all = this.getItem<CVData[]>('cvs', []);
+      const idx = all.findIndex((c) => c.id === data.cv.id);
+      if (idx >= 0) all[idx] = data.cv;
+      else all.unshift(data.cv);
+      this.setItem('cvs', all);
+      return { success: true, cv: data.cv };
+    } catch {
+      return { success: false, error: 'Serveur inaccessible pour enregistrer le CV.' };
+    }
+  }
+
   deleteCV(id: string): boolean {
-    const all = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
+    const all = this.getItem<CVData[]>('cvs', []);
     const filtered = all.filter((c) => c.id !== id);
     if (filtered.length !== all.length) {
       this.setItem('cvs', filtered);
-      if (typeof window !== 'undefined' && typeof fetch === 'function') {
+      if (typeof window !== 'undefined' && typeof fetch === 'function' && this.getAuthToken()) {
         fetch(`/api/cvs/${encodeURIComponent(id)}`, {
-          method: 'DELETE'
+          method: 'DELETE',
+          headers: this.getAuthHeaders(false)
         }).catch(() => {});
       }
       return true;
@@ -615,17 +734,125 @@ class StorageService {
   duplicateCV(id: string): CVData | null {
     const original = this.getCVById(id);
     if (!original) return null;
+    const cloned = JSON.parse(JSON.stringify(original));
+    // Sécurité commerciale : la copie repart en brouillon Découverte sans hériter du paiement d'origine
+    delete cloned.access;
     const copy: CVData = {
-      ...JSON.parse(JSON.stringify(original)),
-      id: 'cv_' + Date.now(),
+      ...cloned,
+      id: 'cv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
       title: `${original.title} (Copie)`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    const all = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
-    all.unshift(copy);
-    this.setItem('cvs', all);
-    return copy;
+    return this.saveCV(copy);
+  }
+
+  async syncUserDataFromServer(): Promise<{ user: UserProfile | null; cvs: CVData[] }> {
+    const token = this.getAuthToken();
+    if (!token) {
+      return { user: null, cvs: [] };
+    }
+    try {
+      const meRes = await fetch('/api/auth/me', {
+        headers: this.getAuthHeaders(false)
+      });
+      if (!meRes.ok) {
+        if (meRes.status === 401 || meRes.status === 403) {
+          this.setCurrentUser(null);
+        }
+        return { user: null, cvs: [] };
+      }
+      const meData = await meRes.json();
+      const serverUser: UserProfile = meData.user;
+      this.setCurrentUser(serverUser);
+      this.saveUser(serverUser);
+
+      const [cvsRes, ordersRes, payRes] = await Promise.all([
+        fetch('/api/cvs', { headers: this.getAuthHeaders(false) }),
+        fetch(`/api/orders/user/${encodeURIComponent(serverUser.id)}`, { headers: this.getAuthHeaders(false) }),
+        fetch(`/api/payments/user/${encodeURIComponent(serverUser.id)}`, { headers: this.getAuthHeaders(false) })
+      ]);
+
+      let serverCVs: CVData[] = this.getCVs(serverUser.id);
+      if (cvsRes.ok) {
+        const d = await cvsRes.json();
+        if (d.success && Array.isArray(d.cvs)) {
+          serverCVs = d.cvs;
+          const otherCVs = this.getItem<CVData[]>('cvs', []).filter((c) => c.userId && c.userId !== serverUser.id);
+          this.setItem('cvs', [...serverCVs, ...otherCVs]);
+        }
+      }
+      if (ordersRes.ok) {
+        const d = await ordersRes.json();
+        if (d.success && Array.isArray(d.orders)) {
+          const otherOrders = this.getItem<ManualPaymentOrder[]>('manual_orders', []).filter(
+            (o) => o.userId !== serverUser.id
+          );
+          this.setItem('manual_orders', [...d.orders, ...otherOrders]);
+        }
+      }
+      if (payRes.ok) {
+        const d = await payRes.json();
+        if (d.success && Array.isArray(d.payments)) {
+          const otherPay = this.getItem<PaymentTransaction[]>('payments', []).filter(
+            (p) => p.userId !== serverUser.id
+          );
+          this.setItem('payments', [...d.payments, ...otherPay]);
+        }
+      }
+
+      return { user: serverUser, cvs: serverCVs };
+    } catch {
+      return { user: this.getCurrentUser(), cvs: this.getCVs(this.getCurrentUser()?.id) };
+    }
+  }
+
+  async syncAdminDataFromServer(): Promise<{ success: boolean; metrics?: AdminMetrics; error?: string }> {
+    const token = this.getAuthToken();
+    if (!token) return { success: false, error: 'Jeton administrateur manquant.' };
+    try {
+      const headers = this.getAuthHeaders(false);
+      const [metricsRes, usersRes, ordersRes, cvsRes, logsRes] = await Promise.all([
+        fetch('/api/admin/metrics', { headers }),
+        fetch('/api/admin/users', { headers }),
+        fetch('/api/admin/orders', { headers }),
+        fetch('/api/admin/cvs', { headers }),
+        fetch('/api/admin/logs', { headers })
+      ]);
+
+      if (metricsRes.status === 401 || metricsRes.status === 403) {
+        return { success: false, error: 'Session administrateur expirée ou refusée.' };
+      }
+
+      if (usersRes.ok) {
+        const d = await usersRes.json();
+        if (d.success && Array.isArray(d.users)) this.setItem('users_list', d.users);
+      }
+      if (ordersRes.ok) {
+        const d = await ordersRes.json();
+        if (d.success && Array.isArray(d.orders)) this.setItem('manual_orders', d.orders);
+      }
+      if (cvsRes.ok) {
+        const d = await cvsRes.json();
+        if (d.success && Array.isArray(d.cvs)) this.setItem('cvs', d.cvs);
+      }
+      if (logsRes.ok) {
+        const d = await logsRes.json();
+        if (d.success && Array.isArray(d.logs)) this.setItem('audit_logs', d.logs);
+      }
+      if (metricsRes.ok) {
+        const d = await metricsRes.json();
+        if (d.success && d.metrics) {
+          if (Array.isArray(d.metrics.recentPayments)) {
+            this.setItem('payments', d.metrics.recentPayments);
+          }
+          return { success: true, metrics: d.metrics };
+        }
+      }
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Erreur synchronisation administration.' };
+    }
   }
 
   // --- Plans & Quotas ---
@@ -656,22 +883,7 @@ class StorageService {
 
   // --- Payments & Subscriptions ---
   getPayments(userId?: string): PaymentTransaction[] {
-    const all = this.getItem<PaymentTransaction[]>('payments', [
-      {
-        id: 'tx_demo_01',
-        userId: 'user_benin_demo',
-        planId: 'plan_free',
-        planName: 'Formule Découverte',
-        provider: 'mtn_momo',
-        providerReference: 'MTN-BJ-INIT-001',
-        amountXOF: 0,
-        currency: 'XOF',
-        phoneNumber: '+229 97 12 34 56',
-        status: 'confirmed',
-        confirmedAt: '2026-10-01T00:00:00.000Z',
-        createdAt: '2026-10-01T00:00:00.000Z'
-      }
-    ]);
+    const all = this.getItem<PaymentTransaction[]>('payments', []);
     if (!userId) return all;
     return all.filter((p) => p.userId === userId);
   }
@@ -1024,7 +1236,7 @@ class StorageService {
   // --- Admin Metrics ---
   getAdminMetrics(): AdminMetrics {
     const users = this.getUsers();
-    const cvs = this.getItem<CVData[]>('cvs', [INITIAL_DEMO_CV]);
+    const cvs = this.getItem<CVData[]>('cvs', []);
     const manualOrders = this.getManualOrders();
     const payments = this.getPayments();
 

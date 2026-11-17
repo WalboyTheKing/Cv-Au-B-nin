@@ -57,19 +57,19 @@ export const Navbar: React.FC<NavbarProps> = ({
       );
     }
     const code = currentUser.subscription.planCode;
-    if (code === 'plus_30d') {
+    if (code === 'career_30d' || code === 'plus_30d') {
       return (
         <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full border border-amber-300 flex items-center gap-1">
           <Sparkles className="w-2.5 h-2.5 text-amber-600" />
-          Pass Carrière (30j)
+          Pack Carrière (30j)
         </span>
       );
     }
-    if (code === 'premium_7d') {
+    if (code === 'cand_24h' || code === 'premium_7d') {
       return (
         <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1">
           <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
-          Premium (7j)
+          Candidature (24h)
         </span>
       );
     }

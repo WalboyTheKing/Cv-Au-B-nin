@@ -66,15 +66,19 @@ export const LegalModal: React.FC<LegalModalProps> = ({ topic, onClose }) => {
             </p>
           </div>
           <div>
-            <h4 className="font-bold text-slate-900 mb-1">2. Accès et Création de Compte</h4>
+            <h4 className="font-bold text-slate-900 mb-1">2. Offres, Droits et Règles d'Expiration</h4>
             <p>
-              L'utilisateur s'engage à fournir des coordonnées valides lors de son inscription. Le compte est strictement personnel : un utilisateur ne peut pas céder ses accès à un tiers. Les fonctionnalités gratuites sont accessibles sans paiement obligatoire. Les fonctionnalités avancées (modèles premium, suppression de filigrane, téléchargements multiples) nécessitent la souscription d'un forfait prépayé.
+              Le compte est strictement personnel. Trois formules transparentes sont proposées :
+              <br />• <strong>Découverte (0 FCFA)</strong> : création et modification gratuites jusqu'à 5 CV, export PDF avec filigrane.
+              <br />• <strong>Accès Candidature (500 FCFA / 24h)</strong> : débloque la modification illimitée et l'export PDF A4 propre (sans filigrane) pour <strong>1 CV précis</strong> pendant 24 heures calculées côté serveur.
+              <br />• <strong>Pack Carrière (1 000 FCFA / 30 jours)</strong> : porte le quota de sauvegarde jusqu'à 15 CV et débloque la modification et l'export PDF propre sans filigrane pendant 30 jours sur le CV activé.
+              <br /><strong>Protection des données :</strong> à l'expiration d'un pass payant, vos CV ne sont <strong>jamais supprimés</strong> ; ils restent consultables en lecture seule et tout export propre ou nouvelle modification sur un CV expiré nécessite un renouvellement.
             </p>
           </div>
           <div>
             <h4 className="font-bold text-slate-900 mb-1">3. Utilisation Conforme & Éthique</h4>
             <p>
-              Il est rigoureusement interdit d'utiliser la plateforme pour générer de faux documents officiels, usurper l'identité de tiers ou porter atteinte à l'honneur d'organisations. Tout compte se livrant à des pratiques frauduleuses sera immédiatement suspendu.
+              Il est rigoureusement interdit d'utiliser la plateforme pour générer de faux documents officiels, usurper l'identité de tiers ou porter atteinte à l'honneur d'organisations. Tout compte se livrant à des pratiques frauduleuses (dont la soumission de fausses références de transaction) sera immédiatement suspendu.
             </p>
           </div>
           <div>
@@ -125,20 +129,20 @@ export const LegalModal: React.FC<LegalModalProps> = ({ topic, onClose }) => {
           <div>
             <h4 className="font-bold text-slate-900 mb-1">1. Tarification en Francs CFA (FCFA)</h4>
             <p>
-              Tous les prix indiqués sur {APP_CONFIG.brandName} sont stipulés en Francs CFA (XOF) toutes taxes comprises. Les forfaits sont prépayés pour une durée déterminée (ex : 500 FCFA pour 7 jours ou 1 000 FCFA pour 30 jours).
-              <strong> Aucun renouvellement automatique n'est imposé :</strong> aucun prélèvement imprévu ne sera effectué sur votre compte Mobile Money à l'expiration de votre accès.
+              Tous les prix indiqués sur {APP_CONFIG.brandName} sont stipulés en Francs CFA (XOF) toutes taxes comprises : <strong>500 FCFA</strong> pour l'Accès Candidature (24 heures) et <strong>1 000 FCFA</strong> pour le Pack Carrière (30 jours).
+              <strong> Aucun renouvellement automatique n'est imposé :</strong> aucun prélèvement imprévu ne sera effectué sur votre compte Moov Money à l'expiration de votre accès.
             </p>
           </div>
           <div>
-            <h4 className="font-bold text-slate-900 mb-1">2. Moyens de Paiement Agréés au Bénin</h4>
+            <h4 className="font-bold text-slate-900 mb-1">2. Moyen de Paiement Officiel au Bénin</h4>
             <p>
-              Les règlements s'effectuent via les réseaux nationaux MTN Mobile Money (*880#), Moov Money (*855#) ou par carte bancaire locale via notre partenaire d'encaissement FedaPay. L'accès aux fonctionnalités premium est débloqué dès réception de la confirmation de paiement.
+              Les règlements s'effectuent exclusivement par dépôt manuel <strong>Moov Money Bénin ({APP_CONFIG.moovBeneficiary.ussdCode})</strong> sur le numéro marchand <strong>{APP_CONFIG.moovBeneficiary.phoneNumber}</strong> (titulaire : <strong>{APP_CONFIG.moovBeneficiary.beneficiaryName}</strong>). Après avoir saisi votre référence exacte de transaction SMS dans votre espace de paiement, notre équipe administrative vérifie et active vos droits pour le CV choisi.
             </p>
           </div>
           <div>
             <h4 className="font-bold text-slate-900 mb-1">3. Politique de Remboursement et Réclamation</h4>
             <p>
-              Si un débit a été constaté sur votre compte Mobile Money mais qu'un incident réseau a empêché l'activation automatique de votre forfait, notre service d'assistance vérifie la référence de transaction et crédite votre compte immédiatement.
+              Si un dépôt Moov Money valide a été effectué avec une erreur de référence ou un retard de validation, contactez notre support WhatsApp ({APP_CONFIG.supportPhone}) avec votre capture ou identifiant de transaction pour régularisation immédiate.
               En cas d'incompatibilité technique majeure démontrée empêchant le téléchargement de votre CV avant toute utilisation effective, un remboursement peut être demandé dans les 48 heures suivant la transaction.
             </p>
           </div>

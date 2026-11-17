@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: cv-pro-benin
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SALT
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MOOV_BENEFICIARY_NAME
+        value: Waaliyou Z Labouda
+      - key: MOOV_BENEFICIARY_PHONE
+        value: "0194537741"
+      - key: MOOV_USSD_CODE
+        value: "*855#"
+      - key: SUPPORT_EMAIL
+        value: contact@cvprobenin.bj

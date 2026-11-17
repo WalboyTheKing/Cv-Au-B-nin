@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { CVData, getCVPermissions, Plan, UserProfile } from './types';
-import { storageService, INITIAL_DEMO_CV } from './services/storage';
+import { storageService, createBlankCV } from './services/storage';
 import { Navbar } from './components/common/Navbar';
 import { Footer } from './components/common/Footer';
 import { LegalModal, LegalTopic } from './components/common/LegalModal';
@@ -22,17 +22,6 @@ import { FAQSection } from './components/home/FAQSection';
 import { CVBuilder } from './components/builder/CVBuilder';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { AdminPanel } from './components/admin/AdminPanel';
-
-const GUEST_USER_FALLBACK: UserProfile = {
-  id: 'guest_user',
-  email: 'candidat@cvprobenin.bj',
-  firstName: 'Candidat',
-  lastName: 'Bénin',
-  countryCode: 'BJ',
-  role: 'user',
-  createdAt: '2026-01-01T00:00:00.000Z',
-  updatedAt: '2026-01-01T00:00:00.000Z'
-};
 
 const getTabFromPath = (path: string, hash?: string): string => {
   const currentHash = hash !== undefined ? hash : (typeof window !== 'undefined' ? window.location.hash : '');
@@ -66,14 +55,18 @@ export default function App() {
   const [plans, setPlans] = useState<Plan[]>(() => storageService.getPlans());
   const [cvs, setCvs] = useState<CVData[]>(() => storageService.getCVs(currentUser?.id));
   const [activeCV, setActiveCV] = useState<CVData>(() => {
-    const list = storageService.getCVs();
-    return list.length > 0 ? list[0] : INITIAL_DEMO_CV;
+    if (currentUser?.id) {
+      const userList = storageService.getCVs(currentUser.id);
+      if (userList.length > 0) return userList[0];
+    }
+    return createBlankCV(currentUser?.id);
   });
 
   // États des modales globales
   const [legalTopic, setLegalTopic] = useState<LegalTopic | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [selectedPlanForPayment, setSelectedPlanForPayment] = useState<Plan | null>(null);
+  const [pendingPlanAfterAuth, setPendingPlanAfterAuth] = useState<Plan | null>(null);
   const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
 
   // Synchronisation des données
@@ -86,7 +79,35 @@ export default function App() {
 
   useEffect(() => {
     refreshData();
+    if (storageService.getAuthToken()) {
+      storageService.syncUserDataFromServer().then((res) => {
+        if (res.user) {
+          setCurrentUser(res.user);
+          setCvs(res.cvs);
+          setActiveCV((prev) => {
+            const matched = res.cvs.find((c) => c.id === prev.id);
+            return matched || prev;
+          });
+        } else {
+          setCurrentUser(null);
+          setCvs([]);
+        }
+      });
+    }
   }, [currentTab]);
+
+  const openPaymentFlow = (planToOpen: Plan, targetCVOverride?: CVData) => {
+    if (targetCVOverride) {
+      setActiveCV(targetCVOverride);
+    }
+    const loggedUser = storageService.getCurrentUser();
+    if (!loggedUser || !storageService.getAuthToken()) {
+      setPendingPlanAfterAuth(planToOpen);
+      setAuthModalOpen(true);
+      return;
+    }
+    setSelectedPlanForPayment(planToOpen);
+  };
 
   useEffect(() => {
     const handleUrlChange = () => {
@@ -132,7 +153,9 @@ export default function App() {
       }
     };
     setActiveCV(updatedCV);
-    storageService.saveCV(updatedCV);
+    if (currentUser) {
+      storageService.saveCV(updatedCV);
+    }
     handleNavigate('builder');
   };
 
@@ -144,19 +167,14 @@ export default function App() {
       setQuotaNotice(
         `Plafond de CV atteint (${cvs.length} CV). Passez au Pack Carrière 30 Jours pour créer jusqu'à 15 CV.`
       );
-      setSelectedPlanForPayment(plans.find((p) => p.code === 'career_30d') || plans[1] || plans[0]);
+      openPaymentFlow(plans.find((p) => p.code === 'career_30d') || plans[1] || plans[0]);
       return;
     }
     setQuotaNotice(null);
-    const newCV: CVData = {
-      ...JSON.parse(JSON.stringify(INITIAL_DEMO_CV)),
-      id: 'cv_' + Date.now(),
-      userId: currentUser?.id,
-      title: 'Mon Nouveau CV Professionnel',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    storageService.saveCV(newCV);
+    const newCV = createBlankCV(currentUser?.id);
+    if (currentUser) {
+      storageService.saveCV(newCV);
+    }
     setActiveCV(newCV);
     refreshData();
     handleNavigate('builder');
@@ -178,14 +196,24 @@ export default function App() {
     handleNavigate('builder');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const token = storageService.getAuthToken();
+    if (token) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: storageService.getAuthHeaders(false)
+        });
+      } catch {}
+    }
     storageService.setCurrentUser(null);
     setCurrentUser(null);
+    setActiveCV(createBlankCV());
     handleNavigate('home');
     refreshData();
   };
 
-  const handlePaymentSuccess = (plan: Plan) => {
+  const handlePaymentSuccess = (_plan: Plan) => {
     refreshData();
   };
 
@@ -249,7 +277,7 @@ export default function App() {
                   }
                   setCurrentTab('builder');
                 } else {
-                  setSelectedPlanForPayment(p);
+                  openPaymentFlow(p);
                 }
               }}
             />
@@ -264,7 +292,7 @@ export default function App() {
             initialCV={activeCV}
             currentUser={currentUser}
             plans={plans}
-            onOpenPricing={() => setSelectedPlanForPayment(plans[1] || plans[0])}
+            onOpenPricing={() => openPaymentFlow(plans[1] || plans[0])}
             onSaveSuccess={refreshData}
           />
         )}
@@ -290,7 +318,7 @@ export default function App() {
                   }
                   setCurrentTab('builder');
                 } else {
-                  setSelectedPlanForPayment(p);
+                  openPaymentFlow(p);
                 }
               }}
             />
@@ -312,10 +340,7 @@ export default function App() {
             onEditCV={handleEditCV}
             onCreateNewCV={handleCreateNewCV}
             onOpenPricing={(targetCV) => {
-              if (targetCV) {
-                setActiveCV(targetCV);
-              }
-              setSelectedPlanForPayment(plans[1] || plans[0]);
+              openPaymentFlow(plans[1] || plans[0], targetCV);
             }}
             onRefreshData={refreshData}
             onLogout={handleLogout}
@@ -388,20 +413,30 @@ export default function App() {
       {authModalOpen && (
         <AuthModal
           isOpen={authModalOpen}
-          onClose={() => setAuthModalOpen(false)}
+          onClose={() => {
+            setAuthModalOpen(false);
+            setPendingPlanAfterAuth(null);
+          }}
           onLoginSuccess={(u) => {
             setCurrentUser(u);
+            const userCVs = storageService.getCVs(u.id);
+            setActiveCV((prev) => (userCVs.length > 0 ? userCVs[0] : { ...prev, userId: u.id }));
             refreshData();
+            if (pendingPlanAfterAuth) {
+              const planToOpen = pendingPlanAfterAuth;
+              setPendingPlanAfterAuth(null);
+              setSelectedPlanForPayment(planToOpen);
+            }
           }}
         />
       )}
 
       {/* Modale de Paiement Mobile Money Bénin */}
-      {selectedPlanForPayment && (
+      {selectedPlanForPayment && currentUser && (
         <PaymentModal
           plan={selectedPlanForPayment}
           targetCV={activeCV}
-          currentUser={currentUser || GUEST_USER_FALLBACK}
+          currentUser={currentUser}
           onClose={() => {
             setSelectedPlanForPayment(null);
             refreshData();

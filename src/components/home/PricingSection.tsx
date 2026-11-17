@@ -129,7 +129,7 @@ export const PricingSection: React.FC<PricingSectionProps> = ({
                       isFeatured ? 'text-slate-400' : 'text-slate-400'
                     }`}
                   >
-                    Règlement sécurisé MTN & Moov Money
+                    {plan.priceXOF === 0 ? 'Accès immédiat sans paiement' : 'Validation manuelle via Moov Money (*855#)'}
                   </p>
                 </div>
               </div>
@@ -142,16 +142,16 @@ export const PricingSection: React.FC<PricingSectionProps> = ({
           <div className="flex items-center gap-3">
             <Shield className="w-6 h-6 text-emerald-600 shrink-0" />
             <div>
-              <span className="font-bold text-slate-900 block">Zéro mauvaise surprise</span>
-              <span>Pas de reconduction tacite ni d'abonnement involontaire. Vous restez maître de votre solde Mobile Money.</span>
+              <span className="font-bold text-slate-900 block">Zéro mauvaise surprise & Conservation garantie</span>
+              <span>Pas de reconduction tacite. Après expiration, vos CV restent sauvegardés en toute sécurité dans votre espace.</span>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-[11px] font-semibold bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-2xs">
-              MTN *880#
+              Moov Money *855#
             </span>
-            <span className="text-[11px] font-semibold bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-2xs">
-              Moov *855#
+            <span className="text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1.5 rounded-lg shadow-2xs">
+              0194537741
             </span>
           </div>
         </div>

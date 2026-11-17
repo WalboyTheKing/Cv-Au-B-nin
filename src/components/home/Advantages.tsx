@@ -55,9 +55,9 @@ export const Advantages: React.FC = () => {
     },
     {
       icon: <CreditCard className="w-5 h-5 text-emerald-600" />,
-      title: 'Paiement local MTN & Moov en FCFA',
+      title: 'Paiement local Moov Money en FCFA',
       description:
-        'Réglez vos accès premium en toute sécurité via vos comptes Mobile Money béninois habituels, sans carte bancaire internationale obligatoire.'
+        'Réglez vos pass en toute transparence via Moov Money Bénin (*855#) avec validation vérifiée, sans carte bancaire internationale.'
     },
     {
       icon: <ShieldCheck className="w-5 h-5 text-emerald-600" />,

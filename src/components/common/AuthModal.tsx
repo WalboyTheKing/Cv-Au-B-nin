@@ -86,7 +86,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       setIsLoading(true);
 
-      // 1. Tentative d'authentification serveur
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
@@ -94,50 +93,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           body: JSON.stringify({ email: cleanId, password })
         });
         const data = await res.json();
-        if (data.success && data.user) {
+        if (res.ok && data.success && data.user && data.token) {
+          localStorage.setItem('cv_benin_auth_token', data.token);
           storageService.setCurrentUser(data.user);
           storageService.saveUser(data.user);
-          if (data.token) {
-            localStorage.setItem('cv_benin_auth_token', data.token);
-          }
+          await storageService.syncUserDataFromServer();
           setSuccessMsg('Connexion réussie ! Chargement...');
           setTimeout(() => {
             onLoginSuccess(data.user);
             onClose();
-          }, 350);
-          return;
-        } else if (res.status === 401) {
-          setErrorMsg(data.error || 'Identifiant ou mot de passe incorrect.');
-          setIsLoading(false);
+          }, 300);
           return;
         }
-      } catch (netErr) {
-        console.warn('Serveur non joignable, tentative vérification locale', netErr);
-      }
-
-      // 2. Repli local sécurisé
-      const users = storageService.getUsers();
-      const digits = cleanId.replace(/\D/g, '');
-      const found = users.find((u) => {
-        if (u.email.toLowerCase() === cleanId.toLowerCase()) return true;
-        if (digits.length >= 8) {
-          const userPhoneDigits = (u.phoneNumber || '').replace(/\D/g, '');
-          if (userPhoneDigits && (userPhoneDigits.endsWith(digits) || digits.endsWith(userPhoneDigits))) {
-            return true;
-          }
-        }
-        return false;
-      });
-
-      if (found) {
-        storageService.setCurrentUser(found);
-        setSuccessMsg('Connexion réussie ! Chargement...');
-        setTimeout(() => {
-          onLoginSuccess(found);
-          onClose();
-        }, 350);
-      } else {
-        setErrorMsg('Aucun compte trouvé avec cet identifiant. Veuillez vérifier ou vous inscrire.');
+        setErrorMsg(data.error || 'Identifiant ou mot de passe incorrect.');
+      } catch {
+        setErrorMsg('Impossible de joindre le serveur d’authentification. Vérifiez votre connexion.');
+      } finally {
         setIsLoading(false);
       }
     } else {
@@ -165,7 +136,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       setIsLoading(true);
 
-      // 1. Tentative inscription serveur
       try {
         const res = await fetch('/api/auth/register', {
           method: 'POST',
@@ -179,56 +149,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           })
         });
         const data = await res.json();
-        if (data.success && data.user) {
+        if (res.ok && data.success && data.user && data.token) {
+          localStorage.setItem('cv_benin_auth_token', data.token);
           storageService.setCurrentUser(data.user);
           storageService.saveUser(data.user);
-          if (data.token) {
-            localStorage.setItem('cv_benin_auth_token', data.token);
-          }
+          await storageService.syncUserDataFromServer();
           setSuccessMsg('Compte créé avec succès ! Bienvenue sur CV Pro Bénin.');
           setTimeout(() => {
             onLoginSuccess(data.user);
             onClose();
-          }, 400);
-          return;
-        } else {
-          setErrorMsg(data.error || 'Erreur lors de la création de votre compte.');
-          setIsLoading(false);
+          }, 350);
           return;
         }
-      } catch (netErr) {
-        console.warn('Serveur non joignable, enregistrement local', netErr);
+        setErrorMsg(data.error || 'Erreur lors de la création de votre compte.');
+      } catch {
+        setErrorMsg('Impossible de joindre le serveur pour créer le compte. Réessayez.');
+      } finally {
+        setIsLoading(false);
       }
-
-      // 2. Repli local
-      const newUser: UserProfile = {
-        id: 'user_' + Date.now(),
-        email: emailRegister.trim(),
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        countryCode: 'BJ',
-        phoneNumber: phone.trim(),
-        role: 'user',
-        subscription: {
-          id: 'sub_' + Date.now(),
-          userId: 'user_' + Date.now(),
-          planId: 'plan_free',
-          planCode: 'free',
-          status: 'active',
-          startsAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 365 * 86400000).toISOString(),
-          createdAt: new Date().toISOString()
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      storageService.saveUser(newUser);
-      storageService.setCurrentUser(newUser);
-      setSuccessMsg('Compte créé avec succès !');
-      setTimeout(() => {
-        onLoginSuccess(newUser);
-        onClose();
-      }, 400);
     }
   };
 

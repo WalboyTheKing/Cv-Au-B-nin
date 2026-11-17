@@ -11,20 +11,20 @@ export const FAQSection: React.FC = () => {
 
   const faqs = [
     {
-      q: 'Comment s’effectue le paiement par Mobile Money au Bénin ?',
-      a: 'Le règlement s’effectue en Francs CFA (XOF) directement avec votre numéro MTN Mobile Money (*880#) ou Moov Money (*855#). Une notification USSD s’affiche sur votre téléphone pour confirmer la transaction. Dès validation, votre forfait Premium ou Plus est immédiatement activé sans délai.'
+      q: 'Comment s’effectue le paiement par Moov Money au Bénin ?',
+      a: 'Le règlement s’effectue en Francs CFA (XOF) via Moov Money (*855#) vers le numéro 0194537741 (Waaliyou Z Labouda). Vous renseignez ensuite votre référence de transaction SMS dans l’application, et votre accès est activé dès vérification par l’administration.'
     },
     {
       q: 'Y a-t-il un renouvellement automatique ou un prélèvement imprévu ?',
-      a: 'Absolument aucun. Nos forfaits sont strictement prépayés pour la période sélectionnée (7 jours ou 30 jours). À la fin de la période, votre forfait s’arrête simplement sans aucun débit sur votre portefeuille électronique.'
+      a: 'Absolument aucun. Vous choisissez librement entre la formule Découverte gratuite, l’Accès Candidature (500 FCFA / 24h) ou le Pack Carrière (1 000 FCFA / 30 jours). À l’expiration, aucun débit n’est effectué.'
+    },
+    {
+      q: 'Mes CV sont-ils supprimés à la fin des 24 heures ou des 30 jours ?',
+      a: 'Jamais. Vos CV restent conservés en sécurité dans votre espace personnel. Après expiration d’un accès payant, le CV concerné passe simplement en consultation et nécessite un nouveau pass pour être modifié à nouveau ou exporté sans filigrane.'
     },
     {
       q: 'Mon CV au format PDF est-il compatible avec les systèmes de recrutement (ATS) ?',
-      a: 'Oui. Nos 15 modèles génèrent des documents au format A4 avec une typographie nette et une structure claire qui respecte les standards de lecture automatique utilisés par les cabinets de recrutement et les ONG au Bénin.'
-    },
-    {
-      q: 'Puis-je modifier mon CV après l’avoir téléchargé ?',
-      a: 'Tout à fait. Votre CV reste enregistré dans votre espace personnel. Vous pouvez y accéder à tout moment depuis votre téléphone, tablette ou ordinateur pour actualiser une expérience, changer de couleur ou de modèle.'
+      a: 'Oui. Nos 15 modèles génèrent des documents A4 avec texte réel sélectionnable, indexable par les logiciels ATS, et des liens cliquables (téléphone, WhatsApp, e-mail, LinkedIn et portfolio).'
     },
     {
       q: 'Je suis jeune diplômé sans expérience professionnelle, comment faire ?',

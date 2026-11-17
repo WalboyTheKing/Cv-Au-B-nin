@@ -21,7 +21,7 @@ import {
   Skill,
   UserProfile
 } from '../../types';
-import { storageService } from '../../services/storage';
+import { createBlankCV, storageService } from '../../services/storage';
 import { generateCVPdf, triggerPrintDialog } from '../../services/pdfGenerator';
 import {
   analyzeJobMatch,
@@ -63,7 +63,6 @@ import {
   X,
   Sliders,
   Check,
-  Share2,
   Target,
   Award,
   Copy,
@@ -106,6 +105,8 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     return clean;
   });
 
+  const skipNextAutoSaveRef = useRef<boolean>(true);
+
   useEffect(() => {
     const clean = { ...initialCV };
     const fn = clean.personalInfo?.firstName || '';
@@ -125,6 +126,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
       };
       clean.title = `CV Modernisé - ${clean.personalInfo.firstName} DOSSOUVI`;
     }
+    skipNextAutoSaveRef.current = true;
     setCV(clean);
   }, [initialCV.id]);
 
@@ -141,8 +143,10 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
   const [showFullscreenPreview, setShowFullscreenPreview] = useState<boolean>(false);
 
-  // Vérification serveur des droits d'exportation (anti-tampering)
+  // Vérification serveur des droits d'exportation et d'édition (anti-tampering)
   const [serverCleanAllowed, setServerCleanAllowed] = useState<boolean | null>(null);
+  const [serverExpiredLocked, setServerExpiredLocked] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Assistant IA Pro (Analyse offre, Audit & Score, Lettre de motivation)
   const [showAIAssistantModal, setShowAIAssistantModal] = useState<boolean>(false);
@@ -158,7 +162,9 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
 
   // Mise à jour de l'échelle selon l'écran au montage
   useEffect(() => {
-    if (window.innerWidth < 1024) {
+    if (window.innerWidth < 640) {
+      setPreviewScale(0.41);
+    } else if (window.innerWidth < 1024) {
       setPreviewScale(0.48);
     } else if (window.innerWidth < 1440) {
       setPreviewScale(0.72);
@@ -171,11 +177,23 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
   useEffect(() => {
     let cancelled = false;
     setServerCleanAllowed(null);
-    fetch(`/api/cvs/${encodeURIComponent(cv.id)}/entitlement`)
+    setServerExpiredLocked(false);
+    setSaveError(null);
+
+    if (!storageService.getAuthToken()) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    fetch(`/api/cvs/${encodeURIComponent(cv.id)}/entitlement`, {
+      headers: storageService.getAuthHeaders(false)
+    })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data?.success) return;
         setServerCleanAllowed(Boolean(data.permissions?.canDownloadCleanPDF ?? data.isPremiumActive));
+        setServerExpiredLocked(Boolean(data.permissions?.isExpiredLocked ?? data.isExpiredLocked));
         if (data.access) {
           setCV((prev) => {
             if (prev.id !== cv.id) return prev;
@@ -204,19 +222,6 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     };
   }, [cv.id]);
 
-  // Sauvegarde automatique avec anti-rebond et affichage de l'heure exacte
-  useEffect(() => {
-    setAutoSaveStatus('Enregistrement...');
-    const timer = setTimeout(() => {
-      storageService.saveCV(cv);
-      const d = new Date();
-      const hours = d.getHours().toString().padStart(2, '0');
-      const minutes = d.getMinutes().toString().padStart(2, '0');
-      setAutoSaveStatus(`Enregistré automatiquement à ${hours}:${minutes}`);
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [cv]);
-
   // Droits et 3 permissions distinctes (Créer, Modifier, Exporter PDF)
   const now = Date.now();
   const userCVCount = storageService.getCVs(currentUser?.id).length;
@@ -227,6 +232,44 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     cv.access.expiresAt &&
     cvExpiresTime <= now
   );
+  const isExpiredLocked = Boolean(permissions.isExpiredLocked || serverExpiredLocked);
+
+  // Sauvegarde automatique avec anti-rebond (bloquée si CV verrouillé après expiration)
+  useEffect(() => {
+    if (skipNextAutoSaveRef.current) {
+      skipNextAutoSaveRef.current = false;
+      setAutoSaveStatus(isExpiredLocked ? 'Lecture seule (Expiré)' : 'Prêt à éditer');
+      return;
+    }
+    if (isExpiredLocked) {
+      setAutoSaveStatus('Modification verrouillée (Accès expiré)');
+      return;
+    }
+    setAutoSaveStatus('Enregistrement...');
+    const timer = setTimeout(async () => {
+      if (storageService.getAuthToken()) {
+        const res = await storageService.saveCVToServer(cv);
+        if (!res.success) {
+          setSaveError(res.error || 'Enregistrement bloqué par le serveur.');
+          if (res.code === 'ACCESS_EXPIRED_RENEWAL_REQUIRED') {
+            setServerExpiredLocked(true);
+            setAutoSaveStatus('Lecture seule (Expiré)');
+          } else {
+            setAutoSaveStatus('Non enregistré');
+          }
+          return;
+        }
+        setSaveError(null);
+      } else {
+        storageService.saveCV(cv);
+      }
+      const d = new Date();
+      const hours = d.getHours().toString().padStart(2, '0');
+      const minutes = d.getMinutes().toString().padStart(2, '0');
+      setAutoSaveStatus(`Enregistré automatiquement à ${hours}:${minutes}`);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [cv, isExpiredLocked]);
 
   const hasActiveAccess =
     serverCleanAllowed !== null ? serverCleanAllowed : permissions.canDownloadCleanPDF;
@@ -350,7 +393,7 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
       try {
         const chkRes = await fetch(`/api/cvs/${encodeURIComponent(cv.id)}/export-check`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: storageService.getAuthHeaders(true),
           body: JSON.stringify({ userId: currentUser?.id || cv.userId })
         });
         if (chkRes.ok) {
@@ -382,6 +425,11 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
 
   // Changement de modèle
   const handleSelectTemplate = (templateId: string) => {
+    if (isExpiredLocked) {
+      onOpenPricing();
+      setShowTemplateModal(false);
+      return;
+    }
     const tpl = CV_TEMPLATES.find((t) => t.id === templateId);
     setCV((prev) => ({
       ...prev,
@@ -394,19 +442,12 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
     setShowTemplateModal(false);
   };
 
-  const [copyShareFeedback, setCopyShareFeedback] = useState<boolean>(false);
-
-  const handleShareLink = () => {
-    try {
-      const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}#builder` : '';
-      if (navigator.clipboard && shareUrl) {
-        navigator.clipboard.writeText(shareUrl);
-        setCopyShareFeedback(true);
-        setTimeout(() => setCopyShareFeedback(false), 3000);
-      }
-    } catch (e) {
-      console.warn('Clipboard write error', e);
-    }
+  const handleResetBlankCV = () => {
+    const fresh = createBlankCV(currentUser?.id);
+    skipNextAutoSaveRef.current = true;
+    setCV(fresh);
+    setCurrentStep(1);
+    setAutoSaveStatus('Nouveau CV vierge');
   };
 
   return (
@@ -420,14 +461,15 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
           <div className="relative group">
             <input
               type="text"
+              disabled={isExpiredLocked}
               value={cv.title}
               onChange={(e) => setCV({ ...cv, title: e.target.value })}
-              className="font-black text-sm sm:text-base text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white px-2 py-1 rounded-lg border border-transparent hover:border-slate-300 focus:border-emerald-600 outline-hidden transition-colors w-48 sm:w-72 truncate"
-              title="Cliquez pour renommer ce CV"
+              className="font-black text-sm sm:text-base text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white px-2 py-1 rounded-lg border border-transparent hover:border-slate-300 focus:border-emerald-600 outline-hidden transition-colors w-40 sm:w-72 truncate disabled:opacity-70"
+              title={isExpiredLocked ? 'Renouvelez votre accès pour renommer ce CV' : 'Cliquez pour renommer ce CV'}
             />
           </div>
           <span className="text-[11px] text-slate-400 font-medium hidden md:inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            <span className={`w-1.5 h-1.5 rounded-full ${isExpiredLocked ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
             {autoSaveStatus}
           </span>
         </div>
@@ -492,6 +534,17 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             <span className="hidden md:inline">Plein écran</span>
           </button>
 
+          {/* Nouveau CV vierge */}
+          <button
+            type="button"
+            onClick={handleResetBlankCV}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+            title="Repartir sur un document vierge"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+            <span className="hidden xl:inline">Nouveau vierge</span>
+          </button>
+
           {/* Imprimer */}
           <button
             onClick={() => triggerPrintDialog()}
@@ -500,25 +553,6 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
           >
             <Printer className="w-3.5 h-3.5 text-slate-500" />
             <span>Imprimer</span>
-          </button>
-
-          {/* Partager */}
-          <button
-            onClick={handleShareLink}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-            title="Copier le lien du CV"
-          >
-            {copyShareFeedback ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-emerald-700 font-bold">Lien copié !</span>
-              </>
-            ) : (
-              <>
-                <Share2 className="w-3.5 h-3.5 text-slate-500" />
-                <span>Partager</span>
-              </>
-            )}
           </button>
 
           {/* Télécharger PDF */}
@@ -560,17 +594,17 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
               {cv.access?.planName || 'Accès Validé'}
             </span>
           </div>
-        ) : isCVExpired ? (
+        ) : isCVExpired || isExpiredLocked ? (
           <div className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-amber-950">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                <strong>Accès expiré pour ce CV</strong>. Vos données sont conservées. Les exports comportent un filigrane standard.
+                <strong>Accès expiré pour ce CV (Mode lecture seule)</strong>. Vos données sont intégralement conservées et ne seront jamais supprimées. Renouvelez votre accès via Moov Money pour débloquer les modifications et l'export sans filigrane.
               </span>
             </div>
             <button
               onClick={onOpenPricing}
-              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors shrink-0"
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors shrink-0 cursor-pointer"
             >
               Renouveler l'accès (dès 500 FCFA)
             </button>
@@ -580,12 +614,12 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>
-                <strong>Brouillon non payé</strong> • Sauvegarde automatique active. Export sans filigrane disponible via Moov Money (500 FCFA / 24h ou 1 000 FCFA / 30j).
+                <strong>Brouillon Découverte</strong> • Sauvegarde automatique active. Export sans filigrane disponible via Moov Money (500 FCFA / 24h ou 1 000 FCFA / 30j).
               </span>
             </div>
             <button
               onClick={onOpenPricing}
-              className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors shrink-0"
+              className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors shrink-0 cursor-pointer"
             >
               Débloquer l'export sans filigrane
             </button>
@@ -593,15 +627,18 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
         )}
       </div>
 
-      {exportError && (
+      {(exportError || saveError) && (
         <div className="bg-red-50 border-b border-red-200 px-4 py-2.5 flex items-center justify-between text-xs text-red-800">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-            <span>{exportError}</span>
+            <span>{exportError || saveError}</span>
           </div>
           <button
-            onClick={() => setExportError(null)}
-            className="text-red-700 hover:text-red-900 font-bold ml-4"
+            onClick={() => {
+              setExportError(null);
+              setSaveError(null);
+            }}
+            className="text-red-700 hover:text-red-900 font-bold ml-4 cursor-pointer"
           >
             Fermer
           </button>
@@ -689,42 +726,44 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             </div>
           </div>
 
-          {/* Formulaires d'étape */}
-          {currentStep === 1 && (
-            <StepPersonalInfo
-              cv={cv}
-              updatePersonalInfo={updatePersonalInfo}
-              handlePhotoUpload={handlePhotoUpload}
-            />
-          )}
+          {/* Formulaires d'étape (verrouillés en lecture seule si forfait payant expiré) */}
+          <fieldset disabled={isExpiredLocked && currentStep <= 8} className="space-y-4 disabled:opacity-75">
+            {currentStep === 1 && (
+              <StepPersonalInfo
+                cv={cv}
+                updatePersonalInfo={updatePersonalInfo}
+                handlePhotoUpload={handlePhotoUpload}
+              />
+            )}
 
-          {currentStep === 2 && (
-            <StepProfileSummary
-              cv={cv}
-              setCV={setCV}
-              onEnhance={handleEnhanceSummary}
-              onCorrectGrammar={handleCorrectSummaryGrammar}
-              isAILoading={isAILoading}
-            />
-          )}
+            {currentStep === 2 && (
+              <StepProfileSummary
+                cv={cv}
+                setCV={setCV}
+                onEnhance={handleEnhanceSummary}
+                onCorrectGrammar={handleCorrectSummaryGrammar}
+                isAILoading={isAILoading}
+              />
+            )}
 
-          {currentStep === 3 && <StepExperiences cv={cv} setCV={setCV} />}
+            {currentStep === 3 && <StepExperiences cv={cv} setCV={setCV} />}
 
-          {currentStep === 4 && <StepEducations cv={cv} setCV={setCV} />}
+            {currentStep === 4 && <StepEducations cv={cv} setCV={setCV} />}
 
-          {currentStep === 5 && <StepSkills cv={cv} setCV={setCV} />}
+            {currentStep === 5 && <StepSkills cv={cv} setCV={setCV} />}
 
-          {currentStep === 6 && <StepLanguages cv={cv} setCV={setCV} />}
+            {currentStep === 6 && <StepLanguages cv={cv} setCV={setCV} />}
 
-          {currentStep === 7 && <StepCustomSections cv={cv} setCV={setCV} />}
+            {currentStep === 7 && <StepCustomSections cv={cv} setCV={setCV} />}
 
-          {currentStep === 8 && (
-            <StepDesign
-              cv={cv}
-              setCV={setCV}
-              onOpenGallery={() => setShowTemplateModal(true)}
-            />
-          )}
+            {currentStep === 8 && (
+              <StepDesign
+                cv={cv}
+                setCV={setCV}
+                onOpenGallery={() => setShowTemplateModal(true)}
+              />
+            )}
+          </fieldset>
 
           {currentStep === 9 && <StepValidation cv={cv} onGoToStep={setCurrentStep} />}
 
@@ -736,7 +775,6 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
               onDownload={handleDownloadPDF}
               onPrint={triggerPrintDialog}
               onOpenPricing={onOpenPricing}
-              onShare={handleShareLink}
               isExporting={isExporting}
             />
           )}
@@ -810,7 +848,8 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
                 ))}
                 <button
                   onClick={() => {
-                    if (window.innerWidth < 1024) setPreviewScale(0.48);
+                    if (window.innerWidth < 640) setPreviewScale(0.41);
+                    else if (window.innerWidth < 1024) setPreviewScale(0.48);
                     else if (window.innerWidth < 1440) setPreviewScale(0.72);
                     else setPreviewScale(0.85);
                   }}
@@ -950,23 +989,6 @@ export const CVBuilder: React.FC<CVBuilderProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleShareLink}
-                className="px-3 py-1.5 text-xs font-bold text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                title="Copier le lien"
-              >
-                {copyShareFeedback ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Lien copié !</span>
-                  </>
-                ) : (
-                  <>
-                    <Share2 className="w-3.5 h-3.5" />
-                    <span>Partager</span>
-                  </>
-                )}
-              </button>
               <button
                 onClick={triggerPrintDialog}
                 className="px-3 py-1.5 text-xs font-bold text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -2659,7 +2681,6 @@ function StepDownload({
   onDownload,
   onPrint,
   onOpenPricing,
-  onShare,
   isExporting
 }: {
   cv: CVData;
@@ -2668,7 +2689,6 @@ function StepDownload({
   onDownload: () => void;
   onPrint: () => void;
   onOpenPricing: () => void;
-  onShare: () => void;
   isExporting: boolean;
 }) {
   return (
@@ -2690,8 +2710,12 @@ function StepDownload({
         </div>
         <div className="p-3 rounded-xl bg-white border border-slate-200">
           <div className="font-bold text-slate-700">2. Modification</div>
-          <div className="font-extrabold text-emerald-800 mt-0.5">
-            {permissions.canEditCV ? 'Toujours conservée' : 'Suspendue'}
+          <div className={`font-extrabold mt-0.5 ${permissions.isExpiredLocked ? 'text-amber-700' : permissions.canEditCV ? 'text-emerald-800' : 'text-red-700'}`}>
+            {permissions.isExpiredLocked
+              ? 'Verrouillée (Renouvellement requis)'
+              : permissions.canEditCV
+              ? 'Autorisée'
+              : 'Suspendue'}
           </div>
         </div>
         <div className="p-3 rounded-xl bg-white border border-slate-200">
@@ -2753,14 +2777,6 @@ function StepDownload({
           >
             <Printer className="w-4 h-4 text-slate-600" />
             <span>Imprimer le document</span>
-          </button>
-
-          <button
-            onClick={onShare}
-            className="px-5 py-3 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-semibold text-xs border border-slate-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <Share2 className="w-4 h-4 text-slate-600" />
-            <span>Partager le lien</span>
           </button>
         </div>
       </div>

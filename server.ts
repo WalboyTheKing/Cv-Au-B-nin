@@ -8,9 +8,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import fs from 'fs';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { parseCVText } from './src/services/documentParser.ts';
+import type { GoogleGenAI } from '@google/genai';
+import { db, hashPasswordScrypt, verifyPasswordHash, ServerUser } from './server/db.ts';
 
 dotenv.config();
 
@@ -18,209 +17,225 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-// En conformité avec AI Studio, le serveur écoute sur le port 3000 (ou PORT env)
-const port = Number(process.env.PORT) || 3000;
+const cliPortIdx = process.argv.indexOf('--port');
+const cliPort = cliPortIdx !== -1 ? Number(process.argv[cliPortIdx + 1]) : NaN;
+const port = Number.isFinite(cliPort) && cliPort > 0 ? cliPort : Number(process.env.PORT) || 3000;
 
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
+const AI_RATE_LIMIT_PER_MIN = Math.max(2, Number(process.env.AI_RATE_LIMIT_PER_MIN || 8));
+const AI_DAILY_LIMIT_PER_USER = Math.max(5, Number(process.env.AI_DAILY_LIMIT_PER_USER || 40));
+
+app.disable('x-powered-by');
 app.use(express.json({ limit: '10mb' }));
 
+// En-têtes de sécurité HTTP (compatibles avec les prévisualisations iFrame AI Studio)
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
 // -------------------------------------------------------------------
-// PERSISTANCE SERVEUR SÉCURISÉE (SERVER-DATA)
+// PROTECTION ANTI-ABUS : RATE LIMITER & QUOTA GEMINI
 // -------------------------------------------------------------------
-const DATA_DIR = path.resolve(__dirname, 'server-data');
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch (e) {
-    console.error('Erreur création server-data:', e);
+interface RateEntry {
+  count: number;
+  resetAt: number;
+}
+const authRateMap = new Map<string, RateEntry>();
+const aiRateMap = new Map<string, RateEntry>();
+const aiDailyQuotaMap = new Map<string, { day: string; count: number }>();
+
+function getClientIp(req: express.Request): string {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) {
+    return fwd.split(',')[0].trim();
   }
+  return req.socket.remoteAddress || 'unknown';
 }
 
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
-const CVS_FILE = path.join(DATA_DIR, 'cvs.json');
-const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
-const AUDIT_FILE = path.join(DATA_DIR, 'audit.json');
-
-const AUTH_SALT = process.env.AUTH_SALT || 'cv_pro_benin_secure_salt_2026';
-
-function hashPassword(password: string): string {
-  return crypto.createHmac('sha256', AUTH_SALT).update(password).digest('hex');
-}
-
-function loadCVs(): any[] {
-  try {
-    if (fs.existsSync(CVS_FILE)) {
-      return JSON.parse(fs.readFileSync(CVS_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    console.error('Erreur lecture cvs.json:', e);
+function checkWindowRateLimit(
+  store: Map<string, RateEntry>,
+  key: string,
+  maxRequests: number,
+  windowMs: number
+): { allowed: boolean; retryAfterSec: number } {
+  const now = Date.now();
+  const entry = store.get(key);
+  if (!entry || entry.resetAt <= now) {
+    store.set(key, { count: 1, resetAt: now + windowMs });
+    return { allowed: true, retryAfterSec: 0 };
   }
-  return [];
-}
-
-function saveCVs(cvs: any[]): void {
-  try {
-    fs.writeFileSync(CVS_FILE, JSON.stringify(cvs, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Erreur écriture cvs.json:', e);
+  if (entry.count >= maxRequests) {
+    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)) };
   }
+  entry.count += 1;
+  return { allowed: true, retryAfterSec: 0 };
 }
 
-interface ServerUser {
-  id: string;
-  email: string;
-  passwordHash: string;
-  firstName: string;
-  lastName: string;
-  countryCode: string;
-  phoneNumber: string;
-  role: 'user' | 'admin';
-  subscription: {
-    id: string;
-    userId: string;
-    planId: string;
-    planCode: string;
-    status: 'active' | 'expired';
-    startsAt: string;
-    expiresAt: string;
-    createdAt: string;
-  };
-  token?: string;
-  isSuspended?: boolean;
-  suspendedReason?: string;
-  suspendedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-function loadUsers(): ServerUser[] {
-  try {
-    if (fs.existsSync(USERS_FILE)) {
-      return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    console.error('Erreur lecture users.json:', e);
+function authRateLimitMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const key = `auth:${getClientIp(req)}:${req.path}`;
+  const check = checkWindowRateLimit(authRateMap, key, 15, 5 * 60 * 1000);
+  if (!check.allowed) {
+    return res.status(429).json({
+      success: false,
+      error: `Trop de tentatives. Veuillez réessayer dans ${check.retryAfterSec} secondes.`
+    });
   }
-  // Utilisateurs initiaux par défaut avec mots de passe hashés
-  const defaults: ServerUser[] = [
-    {
-      id: 'user_benin_demo',
-      email: 'candidat.benin@gmail.com',
-      passwordHash: hashPassword('Candidat2026!'),
-      firstName: 'Jean-Eudes',
-      lastName: 'Dossou',
-      countryCode: 'BJ',
-      phoneNumber: '+229 97 12 34 56',
-      role: 'user',
-      subscription: {
-        id: 'sub_demo_free',
-        userId: 'user_benin_demo',
-        planId: 'plan_free',
-        planCode: 'free',
-        status: 'active',
-        startsAt: '2026-10-01T00:00:00.000Z',
-        expiresAt: '2027-10-01T00:00:00.000Z',
-        createdAt: '2026-10-01T00:00:00.000Z'
-      },
-      createdAt: '2026-10-01T00:00:00.000Z',
-      updatedAt: '2026-10-24T00:00:00.000Z'
-    },
-    {
-      id: 'admin_master',
-      email: 'admin@cvprobenin.bj',
-      passwordHash: hashPassword('AdminBenin2026!'),
-      firstName: 'Administrateur',
-      lastName: 'CV Pro Bénin',
-      countryCode: 'BJ',
-      phoneNumber: '+229 90 00 00 01',
-      role: 'admin',
-      subscription: {
-        id: 'sub_admin_plus',
-        userId: 'admin_master',
-        planId: 'plan_plus_30d',
-        planCode: 'plus_30d',
-        status: 'active',
-        startsAt: '2026-01-01T00:00:00.000Z',
-        expiresAt: '2030-01-01T00:00:00.000Z',
-        createdAt: '2026-01-01T00:00:00.000Z'
-      },
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-10-24T00:00:00.000Z'
-    }
-  ];
-  saveUsers(defaults);
-  return defaults;
+  next();
 }
 
-function saveUsers(users: ServerUser[]): void {
-  try {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Erreur écriture users.json:', e);
+async function aiRateAndQuotaMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authUser = await resolveOptionalAuthUser(req);
+  const identityKey = authUser ? `usr:${authUser.id}` : `ip:${getClientIp(req)}`;
+
+  const perMin = checkWindowRateLimit(aiRateMap, `min:${identityKey}`, AI_RATE_LIMIT_PER_MIN, 60 * 1000);
+  if (!perMin.allowed) {
+    return res.status(429).json({
+      success: false,
+      isAI: false,
+      error: `Limite de fréquence IA atteinte. Patientez ${perMin.retryAfterSec} secondes.`
+    });
   }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const daily = aiDailyQuotaMap.get(identityKey);
+  if (!daily || daily.day !== today) {
+    aiDailyQuotaMap.set(identityKey, { day: today, count: 1 });
+  } else if (daily.count >= AI_DAILY_LIMIT_PER_USER) {
+    return res.status(429).json({
+      success: false,
+      isAI: false,
+      error: `Quota journalier IA atteint (${AI_DAILY_LIMIT_PER_USER} requêtes/jour). Le moteur heuristique local reste disponible.`
+    });
+  } else {
+    daily.count += 1;
+  }
+
+  next();
 }
+
+app.get('/api/health', async (_req, res) => {
+  await db.init();
+  res.json({ ok: true, port, storage: db.getMode() });
+});
 
 function sanitizeUser(user: ServerUser) {
-  const { passwordHash, ...safe } = user;
+  const { passwordHash, token, tokenExpiresAt, ...safe } = user;
   return safe;
 }
 
-function loadOrders(): any[] {
-  try {
-    if (fs.existsSync(ORDERS_FILE)) {
-      return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    console.error('Erreur lecture orders.json:', e);
-  }
-  return [];
+function extractBearerToken(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const tok = authHeader.slice(7).trim();
+  return tok || null;
 }
 
-function saveOrders(orders: any[]): void {
-  try {
-    fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Erreur écriture orders.json:', e);
+async function resolveOptionalAuthUser(req: express.Request): Promise<ServerUser | null> {
+  const token = extractBearerToken(req);
+  if (!token) return null;
+  const user = await db.getUserByToken(token);
+  if (!user) return null;
+  if (user.tokenExpiresAt && new Date(user.tokenExpiresAt).getTime() <= Date.now()) {
+    return null;
   }
+  return user;
 }
 
-function loadPayments(): any[] {
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   try {
-    if (fs.existsSync(PAYMENTS_FILE)) {
-      return JSON.parse(fs.readFileSync(PAYMENTS_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    console.error('Erreur lecture payments.json:', e);
-  }
-  return [];
-}
-
-function savePayments(payments: any[]): void {
-  try {
-    fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(payments, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Erreur écriture payments.json:', e);
-  }
-}
-
-// Initialisation sécurisée de Google Gen AI côté serveur (clé protégée)
-let aiClient: GoogleGenAI | null = null;
-function getAiClient(): GoogleGenAI | null {
-  if (!aiClient && process.env.GEMINI_API_KEY) {
-    try {
-      aiClient = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentification requise (jeton Bearer manquant).'
       });
+    }
+
+    const user = await db.getUserByToken(token);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Session expirée ou invalide.' });
+    }
+
+    if (user.tokenExpiresAt && new Date(user.tokenExpiresAt).getTime() <= Date.now()) {
+      return res.status(401).json({ success: false, error: 'Session expirée. Veuillez vous reconnecter.' });
+    }
+
+    if (user.isSuspended) {
+      return res.status(403).json({
+        success: false,
+        error: `Votre compte a été suspendu par l'administration. Motif : ${user.suspendedReason || 'Activité non conforme.'}`
+      });
+    }
+
+    (req as any).authUser = user;
+    next();
+  } catch (err: any) {
+    console.error('[Auth Middleware Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur de vérification de session.' });
+  }
+}
+
+async function checkAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  try {
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentification administrateur requise (jeton Bearer manquant).'
+      });
+    }
+
+    const user = await db.getUserByToken(token);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Session expirée ou invalide.' });
+    }
+    if (user.tokenExpiresAt && new Date(user.tokenExpiresAt).getTime() <= Date.now()) {
+      return res.status(401).json({ success: false, error: 'Session administrateur expirée.' });
+    }
+    if (user.role !== 'admin' || user.isSuspended) {
+      return res.status(403).json({
+        success: false,
+        error: 'Accès administrateur refusé. Permissions insuffisantes ou compte suspendu.'
+      });
+    }
+
+    (req as any).adminUser = user;
+    (req as any).authUser = user;
+    return next();
+  } catch (err: any) {
+    console.error('[Admin Auth Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur vérification administrateur.' });
+  }
+}
+
+// Initialisation paresseuse et sécurisée de Google Gen AI côté serveur (clé protégée)
+let aiClient: GoogleGenAI | null = null;
+let cachedThinkingLevel: any = null;
+async function getAiClient(): Promise<{ client: GoogleGenAI; ThinkingLevel: any } | null> {
+  if (!process.env.GEMINI_API_KEY) return null;
+  if (!aiClient || !cachedThinkingLevel) {
+    try {
+      const mod = await import('@google/genai');
+      cachedThinkingLevel = mod.ThinkingLevel;
+      if (!aiClient) {
+        aiClient = new mod.GoogleGenAI({
+          apiKey: process.env.GEMINI_API_KEY,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build'
+            }
+          }
+        });
+      }
     } catch (e) {
       console.error('Erreur initialisation Gemini API serveur', e);
+      return null;
     }
   }
-  return aiClient;
+  return { client: aiClient, ThinkingLevel: cachedThinkingLevel };
 }
 
 function callWithTimeout<T>(promiseFn: () => Promise<T>, timeoutMs = 35000): Promise<T> {
@@ -232,239 +247,202 @@ function callWithTimeout<T>(promiseFn: () => Promise<T>, timeoutMs = 35000): Pro
   ]);
 }
 
-function loadAuditLogs(): any[] {
-  try {
-    if (fs.existsSync(AUDIT_FILE)) {
-      return JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    console.error('Erreur lecture audit.json:', e);
-  }
-  return [];
-}
+function getCVStatusFlags(cv: any, owner?: ServerUser | null) {
+  const now = Date.now();
+  const access = cv?.access;
+  const expiresTime = access?.expiresAt ? new Date(access.expiresAt).getTime() : 0;
+  const hasPaidHistory = Boolean(access && access.planCode !== 'free' && access.expiresAt);
+  const isPremiumActive = Boolean(access && access.status === 'active' && expiresTime > now);
+  const isExpiredLocked = Boolean(hasPaidHistory && expiresTime <= now);
+  const remainingSeconds = isPremiumActive ? Math.max(0, Math.floor((expiresTime - now) / 1000)) : 0;
 
-function saveAuditLogs(logs: any[]): void {
-  try {
-    fs.writeFileSync(AUDIT_FILE, JSON.stringify(logs, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Erreur écriture audit.json:', e);
-  }
-}
+  const subExpiresMs = owner?.subscription?.expiresAt ? new Date(owner.subscription.expiresAt).getTime() : 0;
+  const isCareerActive = Boolean(
+    owner?.subscription?.status === 'active' &&
+      subExpiresMs > now &&
+      (owner.subscription.planCode === 'career_30d' || owner.subscription.planCode === 'plus_30d')
+  );
+  const maxCVs = isCareerActive ? 15 : 5;
 
-function addServerAuditLog(
-  actorId: string,
-  actorEmail: string,
-  action: string,
-  resourceType: string,
-  resourceId: string,
-  details?: string
-): void {
-  const logs = loadAuditLogs();
-  logs.unshift({
-    id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-    actorId,
-    actorEmail,
-    action,
-    resourceType,
-    resourceId,
-    details: details || '',
-    createdAt: new Date().toISOString()
-  });
-  saveAuditLogs(logs);
-}
-
-function checkAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      error: 'Authentification administrateur requise (jeton Bearer manquant).'
-    });
-  }
-
-  const users = loadUsers();
-  const user = users.find((u) => u.token === token);
-  if (user && user.role === 'admin' && !user.isSuspended) {
-    (req as any).adminUser = user;
-    return next();
-  }
-
-  return res.status(403).json({
-    success: false,
-    error: 'Accès administrateur refusé. Permissions insuffisantes ou session expirée.'
-  });
+  return {
+    isPremiumActive,
+    isExpiredLocked,
+    remainingSeconds,
+    maxCVs,
+    status: isPremiumActive ? ('active' as const) : isExpiredLocked ? ('expired' as const) : ('none' as const)
+  };
 }
 
 // -------------------------------------------------------------------
 // ROUTES API AUTHENTIFICATION & SÉCURITÉ
 // -------------------------------------------------------------------
 
-// 1. Inscription d'un nouveau candidat (Validation stricte, hachage du mot de passe)
-app.post('/api/auth/register', (req, res) => {
-  const { email, password, firstName, lastName, phoneNumber } = req.body;
+// 1. Inscription d'un nouveau candidat
+app.post('/api/auth/register', authRateLimitMiddleware, async (req, res) => {
+  try {
+    const { email, password, firstName, lastName, phoneNumber } = req.body || {};
 
-  if (!email || !password || !firstName || !lastName) {
-    return res.status(400).json({
-      success: false,
-      error: 'Veuillez renseigner tous les champs obligatoires (Nom, Prénom, Email, Mot de passe).'
+    if (!email || !password || !firstName || !lastName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Veuillez renseigner tous les champs obligatoires (Nom, Prénom, Email, Mot de passe).'
+      });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Format d’adresse email invalide.'
+      });
+    }
+
+    if (String(password).length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'Le mot de passe doit comporter au minimum 8 caractères pour protéger vos données.'
+      });
+    }
+
+    const users = await db.getUsers();
+    const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        error: 'Un compte avec cette adresse email existe déjà. Veuillez vous connecter.'
+      });
+    }
+
+    const now = new Date().toISOString();
+    const userId = 'usr_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+    const token = 'tok_' + crypto.randomBytes(32).toString('hex');
+    const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS).toISOString();
+
+    const newUser: ServerUser = {
+      id: userId,
+      email: cleanEmail,
+      passwordHash: hashPasswordScrypt(String(password)),
+      firstName: String(firstName).trim().slice(0, 80),
+      lastName: String(lastName).trim().slice(0, 80),
+      countryCode: 'BJ',
+      phoneNumber: String(phoneNumber || '+229 ').trim().slice(0, 32),
+      role: 'user',
+      subscription: {
+        id: 'sub_' + Date.now(),
+        userId,
+        planId: 'plan_free',
+        planCode: 'free',
+        status: 'active',
+        startsAt: now,
+        expiresAt: new Date(Date.now() + 365 * 86400000).toISOString(),
+        createdAt: now
+      },
+      token,
+      tokenExpiresAt,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    await db.upsertUser(newUser);
+    await db.addAuditLog(userId, cleanEmail, 'Création de compte candidat', 'user', userId);
+
+    res.status(201).json({
+      success: true,
+      user: sanitizeUser(newUser),
+      token
     });
+  } catch (err: any) {
+    console.error('[Register Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur lors de l’inscription.' });
   }
-
-  const cleanEmail = String(email).trim().toLowerCase();
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(cleanEmail)) {
-    return res.status(400).json({
-      success: false,
-      error: 'Format d’adresse email invalide.'
-    });
-  }
-
-  if (String(password).length < 8) {
-    return res.status(400).json({
-      success: false,
-      error: 'Le mot de passe doit comporter au minimum 8 caractères pour protéger vos données.'
-    });
-  }
-
-  const users = loadUsers();
-  const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
-  if (existing) {
-    return res.status(409).json({
-      success: false,
-      error: 'Un compte avec cette adresse email existe déjà. Veuillez vous connecter.'
-    });
-  }
-
-  const now = new Date().toISOString();
-  const userId = 'usr_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-  const token = 'tok_' + crypto.randomBytes(32).toString('hex');
-
-  const newUser: ServerUser = {
-    id: userId,
-    email: cleanEmail,
-    passwordHash: hashPassword(password),
-    firstName: String(firstName).trim(),
-    lastName: String(lastName).trim(),
-    countryCode: 'BJ',
-    phoneNumber: String(phoneNumber || '+229 ').trim(),
-    role: 'user',
-    subscription: {
-      id: 'sub_' + Date.now(),
-      userId,
-      planId: 'plan_free',
-      planCode: 'free',
-      status: 'active',
-      startsAt: now,
-      expiresAt: new Date(Date.now() + 365 * 86400000).toISOString(),
-      createdAt: now
-    },
-    token,
-    createdAt: now,
-    updatedAt: now
-  };
-
-  users.push(newUser);
-  saveUsers(users);
-
-  res.status(201).json({
-    success: true,
-    user: sanitizeUser(newUser),
-    token
-  });
 });
 
-// 2. Connexion d'un candidat ou administrateur
-app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
+// 2. Connexion d'un candidat ou administrateur (sans aucun mot de passe par défaut en dur)
+app.post('/api/auth/login', authRateLimitMiddleware, async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
 
-  if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      error: 'Email ou numéro de téléphone et mot de passe requis.'
-    });
-  }
-
-  const cleanIdentifier = String(email).trim().toLowerCase();
-  const digitsOnly = cleanIdentifier.replace(/\D/g, '');
-  const users = loadUsers();
-  const user = users.find((u) => {
-    if (u.email.toLowerCase() === cleanIdentifier) return true;
-    if (digitsOnly.length >= 8) {
-      const userPhoneDigits = (u.phoneNumber || '').replace(/\D/g, '');
-      if (userPhoneDigits && (userPhoneDigits.endsWith(digitsOnly) || digitsOnly.endsWith(userPhoneDigits))) {
-        return true;
-      }
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email ou numéro de téléphone et mot de passe requis.'
+      });
     }
-    return false;
-  });
 
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      error: 'Identifiants incorrects. Aucun compte associé à cet email ou numéro.'
+    const cleanIdentifier = String(email).trim().toLowerCase();
+    const digitsOnly = cleanIdentifier.replace(/\D/g, '');
+    const users = await db.getUsers();
+    const user = users.find((u) => {
+      if (u.email.toLowerCase() === cleanIdentifier) return true;
+      if (digitsOnly.length >= 8) {
+        const userPhoneDigits = (u.phoneNumber || '').replace(/\D/g, '');
+        if (userPhoneDigits && (userPhoneDigits.endsWith(digitsOnly) || digitsOnly.endsWith(userPhoneDigits))) {
+          return true;
+        }
+      }
+      return false;
     });
-  }
 
-  const hash = hashPassword(password);
-  if (user.passwordHash !== hash) {
-    // Tolérance démo si le mot de passe correspond au mot de passe test par défaut
-    if (
-      (user.email.toLowerCase() === 'candidat.benin@gmail.com' && (password === 'demo' || password === 'Candidat2026!')) ||
-      (user.email.toLowerCase() === 'admin@cvprobenin.bj' && (password === 'admin' || password === 'AdminBenin2026!'))
-    ) {
-      // Démo autorisé
-    } else {
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: 'Identifiants incorrects. Aucun compte associé à cet email ou numéro.'
+      });
+    }
+
+    const passCheck = verifyPasswordHash(String(password), user.passwordHash);
+    if (!passCheck.valid) {
       return res.status(401).json({
         success: false,
         error: 'Mot de passe incorrect.'
       });
     }
-  }
 
-  // Vérification de suspension de compte
-  if (user.isSuspended) {
-    return res.status(403).json({
-      success: false,
-      error: `Votre compte a été suspendu par l'administration. Motif : ${user.suspendedReason || 'Activité non conforme.'}`
+    if (user.isSuspended) {
+      return res.status(403).json({
+        success: false,
+        error: `Votre compte a été suspendu par l'administration. Motif : ${user.suspendedReason || 'Activité non conforme.'}`
+      });
+    }
+
+    const token = 'tok_' + crypto.randomBytes(32).toString('hex');
+    user.token = token;
+    user.tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS).toISOString();
+    if (passCheck.needsRehash) {
+      user.passwordHash = hashPasswordScrypt(String(password));
+    }
+    user.updatedAt = new Date().toISOString();
+    await db.upsertUser(user);
+
+    res.json({
+      success: true,
+      user: sanitizeUser(user),
+      token
     });
+  } catch (err: any) {
+    console.error('[Login Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur lors de la connexion.' });
   }
+});
 
-  const token = 'tok_' + crypto.randomBytes(32).toString('hex');
-  user.token = token;
-  user.updatedAt = new Date().toISOString();
-  saveUsers(users);
-
-  res.json({
-    success: true,
-    user: sanitizeUser(user),
-    token
-  });
+// 2b. Déconnexion (révocation explicite du jeton serveur)
+app.post('/api/auth/logout', requireAuth, async (req, res) => {
+  try {
+    const user: ServerUser = (req as any).authUser;
+    delete user.token;
+    delete user.tokenExpiresAt;
+    user.updatedAt = new Date().toISOString();
+    await db.upsertUser(user);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lors de la déconnexion.' });
+  }
 });
 
 // 3. Vérification de session
-app.get('/api/auth/me', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Non authentifié.' });
-  }
-
-  const token = authHeader.split(' ')[1];
-  const users = loadUsers();
-  const user = users.find((u) => u.token === token);
-
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'Session expirée ou invalide.' });
-  }
-
-  if (user.isSuspended) {
-    return res.status(403).json({
-      success: false,
-      error: `Votre compte a été suspendu par l'administration. Motif : ${user.suspendedReason || 'Activité non conforme.'}`
-    });
-  }
-
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const user: ServerUser = (req as any).authUser;
   res.json({
     success: true,
     user: sanitizeUser(user)
@@ -472,753 +450,891 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // 4. Mise à jour du profil utilisateur
-app.post('/api/auth/profile', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Non authentifié.' });
+app.post('/api/auth/profile', requireAuth, async (req, res) => {
+  try {
+    const user: ServerUser = (req as any).authUser;
+    const { firstName, lastName, phoneNumber } = req.body || {};
+    if (firstName && String(firstName).trim()) user.firstName = String(firstName).trim().slice(0, 80);
+    if (lastName && String(lastName).trim()) user.lastName = String(lastName).trim().slice(0, 80);
+    if (phoneNumber !== undefined) user.phoneNumber = String(phoneNumber).trim().slice(0, 32);
+    user.updatedAt = new Date().toISOString();
+
+    await db.upsertUser(user);
+    await db.addAuditLog(
+      user.id,
+      user.email,
+      `Mise à jour des informations de profil (${user.firstName} ${user.lastName})`,
+      'user',
+      user.id
+    );
+
+    res.json({
+      success: true,
+      user: sanitizeUser(user)
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur mise à jour profil.' });
   }
-
-  const token = authHeader.split(' ')[1];
-  const users = loadUsers();
-  const user = users.find((u) => u.token === token);
-
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'Session expirée.' });
-  }
-
-  if (user.isSuspended) {
-    return res.status(403).json({ success: false, error: 'Compte suspendu.' });
-  }
-
-  const { firstName, lastName, phoneNumber } = req.body;
-  if (firstName && String(firstName).trim()) user.firstName = String(firstName).trim();
-  if (lastName && String(lastName).trim()) user.lastName = String(lastName).trim();
-  if (phoneNumber !== undefined) user.phoneNumber = String(phoneNumber).trim();
-  user.updatedAt = new Date().toISOString();
-
-  saveUsers(users);
-
-  addServerAuditLog(
-    user.id,
-    user.email,
-    `Mise à jour des informations de profil (${user.firstName} ${user.lastName})`,
-    'user',
-    user.id
-  );
-
-  res.json({
-    success: true,
-    user: sanitizeUser(user)
-  });
 });
 
 // 5. Modification du mot de passe
-app.post('/api/auth/change-password', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Non authentifié.' });
-  }
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const user: ServerUser = (req as any).authUser;
+    const { currentPassword, newPassword } = req.body || {};
 
-  const token = authHeader.split(' ')[1];
-  const users = loadUsers();
-  const user = users.find((u) => u.token === token);
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, error: 'Mot de passe actuel et nouveau mot de passe requis.' });
+    }
 
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'Session expirée.' });
-  }
+    const passCheck = verifyPasswordHash(String(currentPassword), user.passwordHash);
+    if (!passCheck.valid) {
+      return res.status(400).json({ success: false, error: 'Le mot de passe actuel est incorrect.' });
+    }
 
-  if (user.isSuspended) {
-    return res.status(403).json({ success: false, error: 'Compte suspendu.' });
-  }
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'Le nouveau mot de passe doit comporter au moins 8 caractères.'
+      });
+    }
 
-  const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword) {
-    return res.status(400).json({ success: false, error: 'Mot de passe actuel et nouveau mot de passe requis.' });
-  }
+    user.passwordHash = hashPasswordScrypt(String(newPassword));
+    user.updatedAt = new Date().toISOString();
+    await db.upsertUser(user);
 
-  const currentHash = hashPassword(currentPassword);
-  const isValidOld =
-    user.passwordHash === currentHash ||
-    (user.email === 'candidat.benin@gmail.com' && (currentPassword === 'demo' || currentPassword === 'Candidat2026!')) ||
-    (user.email === 'admin@cvprobenin.bj' && (currentPassword === 'admin' || currentPassword === 'AdminBenin2026!'));
+    await db.addAuditLog(user.id, user.email, 'Modification du mot de passe avec succès', 'user', user.id);
 
-  if (!isValidOld) {
-    return res.status(400).json({ success: false, error: 'Le mot de passe actuel est incorrect.' });
-  }
-
-  if (String(newPassword).length < 8) {
-    return res.status(400).json({
-      success: false,
-      error: 'Le nouveau mot de passe doit comporter au moins 8 caractères.'
+    res.json({
+      success: true,
+      message: 'Mot de passe modifié avec succès.'
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur changement de mot de passe.' });
   }
-
-  user.passwordHash = hashPassword(newPassword);
-  user.updatedAt = new Date().toISOString();
-  saveUsers(users);
-
-  addServerAuditLog(
-    user.id,
-    user.email,
-    'Modification du mot de passe avec succès',
-    'user',
-    user.id
-  );
-
-  res.json({
-    success: true,
-    message: 'Mot de passe modifié avec succès.'
-  });
 });
 
 // 6. Suppression de son propre compte (Droit à l'effacement APDP Bénin)
-app.post('/api/auth/delete-account', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Non authentifié.' });
-  }
+app.post('/api/auth/delete-account', requireAuth, async (req, res) => {
+  try {
+    const user: ServerUser = (req as any).authUser;
 
-  const token = authHeader.split(' ')[1];
-  let users = loadUsers();
-  const user = users.find((u) => u.token === token);
-
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'Session expirée.' });
-  }
-
-  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
-    return res.status(403).json({
-      success: false,
-      error: 'Le compte administrateur racine de CV PRO BÉNIN ne peut pas être supprimé.'
-    });
-  }
-
-  const deletedUserId = user.id;
-  const deletedEmail = user.email;
-
-  // Suppression des CVs de l'utilisateur
-  const cvs = loadCVs().filter((c) => c.userId !== deletedUserId);
-  saveCVs(cvs);
-
-  // Suppression du compte
-  users = users.filter((u) => u.id !== deletedUserId);
-  saveUsers(users);
-
-  addServerAuditLog(
-    deletedUserId,
-    deletedEmail,
-    `Suppression définitive du compte utilisateur (Droit à l'oubli APDP Bénin)`,
-    'user',
-    deletedUserId
-  );
-
-  res.json({
-    success: true,
-    message: 'Votre compte et vos données ont été définitivement supprimés.'
-  });
-});
-
-// -------------------------------------------------------------------
-// ROUTES API COMMANDES & PAIEMENTS MOOV MONEY BÉNIN
-// -------------------------------------------------------------------
-
-// -------------------------------------------------------------------
-// ROUTES API CVs & CONTRÔLE D'ACCÈS SERVEUR
-// -------------------------------------------------------------------
-
-// Récupération des CVs d'un utilisateur (isolation des comptes)
-app.get('/api/cvs', (req, res) => {
-  const authHeader = req.headers.authorization;
-  let userId = (req.query.userId as string) || '';
-
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    const users = loadUsers();
-    const user = users.find((u) => u.token === token);
-    if (user) {
-      userId = user.id;
+    if (user.role === 'admin' && user.email.toLowerCase() === 'admin@cvprobenin.bj') {
+      return res.status(403).json({
+        success: false,
+        error: 'Le compte administrateur racine de CV PRO BÉNIN ne peut pas être supprimé.'
+      });
     }
-  }
 
-  const cvs = loadCVs();
-  if (!userId) {
-    return res.json({ success: true, cvs: [] });
-  }
+    const deletedUserId = user.id;
+    const deletedEmail = user.email;
 
-  // Filtrage strict : chaque utilisateur ne voit que ses propres CV
-  const userCVs = cvs.filter((c: any) => c.userId === userId);
-  res.json({ success: true, cvs: userCVs });
+    await db.deleteCVsByUser(deletedUserId);
+    await db.deleteUser(deletedUserId);
+    await db.addAuditLog(
+      deletedUserId,
+      deletedEmail,
+      "Suppression définitive du compte utilisateur (Droit à l'oubli APDP Bénin)",
+      'user',
+      deletedUserId
+    );
+
+    res.json({
+      success: true,
+      message: 'Votre compte et vos données ont été définitivement supprimés.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur suppression de compte.' });
+  }
 });
 
-// Récupération d'un CV par son identifiant
-app.get('/api/cvs/:id', (req, res) => {
-  const { id } = req.params;
-  const cvs = loadCVs();
-  const cv = cvs.find((c: any) => c.id === id);
+// -------------------------------------------------------------------
+// ROUTES API CVs & CONTRÔLE D'ACCÈS SERVEUR (STRICT OWNERSHIP + RBAC)
+// -------------------------------------------------------------------
 
-  if (!cv) {
-    return res.status(404).json({ success: false, error: 'CV introuvable.' });
+// Récupération des CVs de l'utilisateur authentifié (isolation multi-tenant stricte)
+app.get('/api/cvs', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const userCVs = await db.getCVs(authUser.id);
+    res.json({ success: true, cvs: userCVs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture des CV.' });
   }
-
-  res.json({ success: true, cv });
 });
 
-// Sauvegarde automatique ou création d'un CV (le client ne peut jamais s'auto-octroyer ou prolonger access)
-app.post('/api/cvs', (req, res) => {
-  const cvData = req.body;
-  if (!cvData || !cvData.id) {
-    return res.status(400).json({ success: false, error: 'Données de CV incomplètes (id requis).' });
+// Récupération d'un CV précis (propriétaire ou admin uniquement)
+app.get('/api/cvs/:id', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const cv = await db.getCVById(req.params.id);
+    if (!cv) {
+      return res.status(404).json({ success: false, error: 'CV introuvable.' });
+    }
+    if (cv.userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Accès interdit à ce CV.' });
+    }
+    res.json({ success: true, cv });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture du CV.' });
   }
+});
 
-  // Protection stricte : suppression systématique de `access` envoyé par le client
-  const { access: _ignoredClientAccess, ...safeClientCV } = cvData;
+// Création / sauvegarde automatique d'un CV (anti-escalation access + verrou après expiration)
+app.post('/api/cvs', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const cvData = req.body;
+    if (!cvData || !cvData.id || typeof cvData.id !== 'string') {
+      return res.status(400).json({ success: false, error: 'Données de CV incomplètes (id requis).' });
+    }
 
-  const cvs = loadCVs();
-  const index = cvs.findIndex((c: any) => c.id === cvData.id);
-  const now = new Date().toISOString();
+    // Protection stricte : suppression de `access` envoyé par le client
+    const { access: _ignoredClientAccess, userId: _ignoredUserId, ...safeClientCV } = cvData;
 
-  if (index >= 0) {
-    // Seul le serveur peut accorder/prolonger `access`
-    const existingAccess = cvs[index].access;
-    cvs[index] = {
+    const existing = await db.getCVById(cvData.id);
+    const now = new Date().toISOString();
+
+    if (existing) {
+      if (existing.userId && existing.userId !== authUser.id && authUser.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Vous n’êtes pas propriétaire de ce CV.' });
+      }
+
+      // Mission 5 : verrouillage des modifications après expiration d'un forfait payant
+      const flags = getCVStatusFlags(existing, authUser);
+      if (flags.isExpiredLocked) {
+        return res.status(403).json({
+          success: false,
+          code: 'ACCESS_EXPIRED_RENEWAL_REQUIRED',
+          error: 'La durée d’accès de ce CV est expirée. Vos données sont conservées mais toute modification exige un nouveau paiement (500 ou 1 000 FCFA).'
+        });
+      }
+
+      const updatedCV = {
+        ...safeClientCV,
+        id: existing.id,
+        userId: existing.userId || authUser.id,
+        ...(existing.access ? { access: existing.access } : {}),
+        createdAt: existing.createdAt || now,
+        updatedAt: now
+      };
+      const saved = await db.upsertCV(updatedCV);
+      return res.json({ success: true, cv: saved });
+    }
+
+    // Création d'un nouveau CV : vérification du quota du compte (5 en Découverte, 15 en Pack Carrière actif)
+    const userCVs = await db.getCVs(authUser.id);
+    const flags = getCVStatusFlags(null, authUser);
+    if (userCVs.length >= flags.maxCVs && authUser.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        error: `Plafond de ${flags.maxCVs} CV atteint. Passez au Pack Carrière (1 000 FCFA / 30 jours) pour créer jusqu'à 15 CV.`
+      });
+    }
+
+    const newCV = {
       ...safeClientCV,
-      ...(existingAccess ? { access: existingAccess } : {}),
-      updatedAt: now
-    };
-  } else {
-    cvs.unshift({
-      ...safeClientCV,
+      userId: authUser.id,
       createdAt: safeClientCV.createdAt || now,
       updatedAt: now
-    });
+    };
+    const saved = await db.upsertCV(newCV);
+    res.json({ success: true, cv: saved });
+  } catch (err: any) {
+    console.error('[Save CV Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur lors de la sauvegarde du CV.' });
   }
-
-  saveCVs(cvs);
-  res.json({ success: true, cv: cvs[index >= 0 ? index : 0] });
 });
 
-// Suppression d'un CV
-app.delete('/api/cvs/:id', (req, res) => {
-  const { id } = req.params;
-  const cvs = loadCVs();
-  const filtered = cvs.filter((c: any) => c.id !== id);
-  saveCVs(filtered);
-  res.json({ success: true });
-});
-
-// Contrôle d'éligibilité et distinction des 3 permissions (Créer, Modifier, Télécharger PDF) côté serveur
-app.get('/api/cvs/:id/entitlement', (req, res) => {
-  const { id } = req.params;
-  const cvs = loadCVs();
-  const cv = cvs.find((c: any) => c.id === id);
-
-  if (!cv) {
-    return res.status(404).json({ success: false, error: 'CV introuvable.' });
-  }
-
-  const users = loadUsers();
-  const owner = cv.userId ? users.find((u) => u.id === cv.userId) : null;
-  const userCVsCount = cv.userId ? cvs.filter((c: any) => c.userId === cv.userId).length : 1;
-
-  const access = cv.access;
-  const now = Date.now();
-  let isPremiumActive = false;
-  let remainingSeconds = 0;
-  let status: 'active' | 'expired' | 'none' = 'none';
-
-  if (access && access.status === 'active' && access.expiresAt) {
-    const expiresTime = new Date(access.expiresAt).getTime();
-    if (expiresTime > now) {
-      isPremiumActive = true;
-      remainingSeconds = Math.max(0, Math.floor((expiresTime - now) / 1000));
-      status = 'active';
-    } else {
-      status = 'expired';
+// Suppression d'un CV (propriétaire ou admin uniquement)
+app.delete('/api/cvs/:id', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const cv = await db.getCVById(req.params.id);
+    if (!cv) {
+      return res.status(404).json({ success: false, error: 'CV introuvable.' });
     }
-  }
-
-  const maxCVs = owner?.subscription?.planCode === 'career_30d' || owner?.subscription?.planCode === 'plus_30d' ? 15 : 5;
-  const isSuspended = Boolean(owner?.isSuspended);
-
-  res.json({
-    success: true,
-    cvId: id,
-    isPremiumActive,
-    status,
-    planCode: access?.planCode || 'free',
-    planName: access?.planName || 'Formule Découverte',
-    approvedAt: access?.approvedAt,
-    expiresAt: access?.expiresAt,
-    remainingSeconds,
-    access: access || null,
-    permissions: {
-      canCreateCV: !isSuspended && userCVsCount < maxCVs,
-      canEditCV: !isSuspended,
-      canDownloadPDF: !isSuspended,
-      canDownloadCleanPDF: !isSuspended && isPremiumActive,
-      canUsePremiumFeatures: !isSuspended && isPremiumActive
+    if (cv.userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Suppression interdite : vous n’êtes pas propriétaire.' });
     }
-  });
+    await db.deleteCV(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur suppression CV.' });
+  }
 });
 
-// Vérification stricte avant export PDF sans filigrane (contrôle serveur)
-app.post('/api/cvs/:id/export-check', (req, res) => {
-  const { id } = req.params;
-  const cvs = loadCVs();
-  const cv = cvs.find((c: any) => c.id === id);
+// Contrôle d'éligibilité et permissions côté serveur
+app.get('/api/cvs/:id/entitlement', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const cv = await db.getCVById(req.params.id);
+    if (!cv) {
+      return res.status(404).json({ success: false, error: 'CV introuvable.' });
+    }
+    if (cv.userId && cv.userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Accès interdit aux droits de ce CV.' });
+    }
 
-  if (!cv) {
-    return res.status(404).json({ success: false, error: 'CV introuvable.' });
-  }
+    const users = await db.getUsers();
+    const owner = cv.userId ? users.find((u) => u.id === cv.userId) : authUser;
+    const userCVs = cv.userId ? await db.getCVs(cv.userId) : [cv];
+    const flags = getCVStatusFlags(cv, owner);
+    const isSuspended = Boolean(owner?.isSuspended);
 
-  const access = cv.access;
-  const now = Date.now();
-  const isPremiumActive = Boolean(
-    access &&
-    access.status === 'active' &&
-    access.expiresAt &&
-    new Date(access.expiresAt).getTime() > now
-  );
-
-  if (!isPremiumActive) {
-    return res.json({
+    res.json({
       success: true,
-      allowWatermarkRemoval: false,
+      cvId: cv.id,
+      isPremiumActive: flags.isPremiumActive,
+      isExpiredLocked: flags.isExpiredLocked,
+      status: flags.status,
+      planCode: cv.access?.planCode || 'free',
+      planName: cv.access?.planName || 'Formule Découverte',
+      approvedAt: cv.access?.approvedAt,
+      expiresAt: cv.access?.expiresAt,
+      remainingSeconds: flags.remainingSeconds,
+      access: cv.access || null,
       permissions: {
+        canCreateCV: !isSuspended && userCVs.length < flags.maxCVs,
+        canEditCV: !isSuspended && !flags.isExpiredLocked,
+        canDownloadPDF: !isSuspended,
+        canDownloadCleanPDF: !isSuspended && flags.isPremiumActive,
+        canUsePremiumFeatures: !isSuspended && flags.isPremiumActive,
+        isExpiredLocked: flags.isExpiredLocked
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur vérification droits CV.' });
+  }
+});
+
+// Vérification stricte avant export PDF sans filigrane (autorise brouillon non persisté en mode Découverte avec filigrane)
+app.post('/api/cvs/:id/export-check', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const cv = await db.getCVById(id);
+
+    if (!cv) {
+      // Brouillon local non encore persisté (visiteur non connecté en essai Découverte) : export avec filigrane uniquement
+      return res.json({
+        success: true,
+        allowWatermarkRemoval: false,
+        permissions: {
+          canCreateCV: true,
+          canEditCV: true,
+          canDownloadPDF: true,
+          canDownloadCleanPDF: false
+        },
+        reason: 'Brouillon Découverte : export PDF avec filigrane standard.'
+      });
+    }
+
+    // Pour tout CV enregistré côté serveur, l'utilisateur doit être authentifié et propriétaire (ou admin)
+    const authUser = await resolveOptionalAuthUser(req);
+    if (!authUser) {
+      return res.status(401).json({ success: false, error: 'Authentification requise pour exporter ce CV.' });
+    }
+    if (cv.userId && cv.userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Accès interdit à l’export de ce CV.' });
+    }
+
+    const flags = getCVStatusFlags(cv, authUser);
+    if (!flags.isPremiumActive) {
+      return res.json({
+        success: true,
+        allowWatermarkRemoval: false,
+        permissions: {
+          canCreateCV: true,
+          canEditCV: !flags.isExpiredLocked,
+          canDownloadPDF: true,
+          canDownloadCleanPDF: false
+        },
+        reason: flags.isExpiredLocked
+          ? 'Accès premium expiré pour ce CV. Renouvelez votre accès pour modifier ou exporter sans filigrane.'
+          : 'CV en version Découverte non payée. Filigrane requis.'
+      });
+    }
+
+    res.json({
+      success: true,
+      allowWatermarkRemoval: true,
+      permissions: {
+        canCreateCV: true,
         canEditCV: true,
         canDownloadPDF: true,
-        canDownloadCleanPDF: false
+        canDownloadCleanPDF: true
       },
-      reason: access?.expiresAt && new Date(access.expiresAt).getTime() <= now
-        ? 'Accès premium expiré pour ce CV. Vos données sont conservées mais le filigrane s’applique.'
-        : 'CV en version Découverte non payée. Filigrane requis.'
+      expiresAt: cv.access?.expiresAt
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur vérification export PDF.' });
   }
-
-  res.json({
-    success: true,
-    allowWatermarkRemoval: true,
-    permissions: {
-      canEditCV: true,
-      canDownloadPDF: true,
-      canDownloadCleanPDF: true
-    },
-    expiresAt: access?.expiresAt
-  });
 });
 
 // -------------------------------------------------------------------
 // ROUTES API COMMANDES & PAIEMENTS MOOV MONEY BÉNIN
 // -------------------------------------------------------------------
 
-// 4. Création d'une commande Moov Money rattachée à un utilisateur et un CV précis
-app.post('/api/orders/create', (req, res) => {
-  const { orderId, orderNumber: clientOrderNumber, userId, userEmail, userName, planCode, cvId, cvTitle } = req.body;
+// 4. Création d'une commande Moov Money rattachée à l'utilisateur connecté et un CV précis
+app.post('/api/orders/create', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const { orderId, orderNumber: clientOrderNumber, planCode, cvId, cvTitle } = req.body || {};
 
-  if (!userId || !cvId) {
-    return res.status(400).json({
-      success: false,
-      error: 'La commande doit être associée à un utilisateur et à un CV précis.'
-    });
-  }
-
-  const validPlans: Record<
-    string,
-    { id: string; name: string; priceXOF: number; durationMs: number; label: string }
-  > = {
-    cand_24h: {
-      id: 'plan_cand_24h',
-      name: 'Accès Candidature (24h)',
-      priceXOF: 500,
-      durationMs: 24 * 60 * 60 * 1000, // Exactement 24 heures
-      label: '24 heures'
-    },
-    premium_7d: {
-      id: 'plan_cand_24h',
-      name: 'Accès Candidature (24h)',
-      priceXOF: 500,
-      durationMs: 24 * 60 * 60 * 1000,
-      label: '24 heures'
-    },
-    career_30d: {
-      id: 'plan_career_30d',
-      name: 'Pack Carrière (30 jours)',
-      priceXOF: 1000,
-      durationMs: 30 * 24 * 60 * 60 * 1000, // Exactement 30 jours
-      label: '30 jours'
-    },
-    plus_30d: {
-      id: 'plan_career_30d',
-      name: 'Pack Carrière (30 jours)',
-      priceXOF: 1000,
-      durationMs: 30 * 24 * 60 * 60 * 1000,
-      label: '30 jours'
+    if (!cvId || typeof cvId !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'La commande doit être associée à un CV précis.'
+      });
     }
-  };
 
-  const selectedPlan = validPlans[planCode];
-  if (!selectedPlan) {
-    return res.status(400).json({ success: false, error: 'Forfait invalide ou non payant.' });
-  }
-
-  const orders = loadOrders();
-  if (orderId) {
-    const existing = orders.find((o) => o.id === orderId);
-    if (existing) {
-      return res.status(200).json({ success: true, order: existing });
+    // Vérifier que si le CV existe sur serveur, il appartient bien à l'utilisateur authentifié
+    const targetCV = await db.getCVById(cvId);
+    if (targetCV && targetCV.userId && targetCV.userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Ce CV appartient à un autre compte.'
+      });
     }
+
+    const validPlans: Record<
+      string,
+      { id: string; code: 'cand_24h' | 'career_30d'; name: string; priceXOF: number }
+    > = {
+      cand_24h: {
+        id: 'plan_cand_24h',
+        code: 'cand_24h',
+        name: 'Accès Candidature (24h)',
+        priceXOF: 500
+      },
+      premium_7d: {
+        id: 'plan_cand_24h',
+        code: 'cand_24h',
+        name: 'Accès Candidature (24h)',
+        priceXOF: 500
+      },
+      career_30d: {
+        id: 'plan_career_30d',
+        code: 'career_30d',
+        name: 'Pack Carrière (30 jours)',
+        priceXOF: 1000
+      },
+      plus_30d: {
+        id: 'plan_career_30d',
+        code: 'career_30d',
+        name: 'Pack Carrière (30 jours)',
+        priceXOF: 1000
+      }
+    };
+
+    const selectedPlan = validPlans[planCode];
+    if (!selectedPlan) {
+      return res.status(400).json({ success: false, error: 'Forfait invalide ou non payant.' });
+    }
+
+    if (orderId) {
+      const existing = await db.getOrderById(orderId);
+      if (existing) {
+        if (existing.userId !== authUser.id && authUser.role !== 'admin') {
+          return res.status(403).json({ success: false, error: 'Commande inaccessible.' });
+        }
+        return res.status(200).json({ success: true, order: existing });
+      }
+    }
+
+    const orderNumber = clientOrderNumber || `CMD-MOOV-${Date.now().toString().slice(-6)}`;
+    const now = new Date().toISOString();
+
+    const newOrder = {
+      id: orderId || 'ord_' + Date.now() + '_' + crypto.randomBytes(2).toString('hex'),
+      orderNumber,
+      userId: authUser.id,
+      userEmail: authUser.email,
+      userName: `${authUser.firstName} ${authUser.lastName}`.trim() || authUser.email,
+      cvId,
+      cvTitle: targetCV?.title || cvTitle || 'Mon CV Professionnel',
+      planId: selectedPlan.id,
+      planName: selectedPlan.name,
+      planCode: selectedPlan.code,
+      amountXOF: selectedPlan.priceXOF,
+      currency: 'XOF',
+      operator: 'moov_money',
+      beneficiaryName: process.env.MOOV_BENEFICIARY_NAME || 'Waaliyou Z Labouda',
+      beneficiaryPhone: process.env.MOOV_BENEFICIARY_PHONE || '0194537741',
+      status: 'pending_payment',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const saved = await db.upsertOrder(newOrder);
+    res.status(201).json({ success: true, order: saved });
+  } catch (err: any) {
+    console.error('[Create Order Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur lors de la création de commande.' });
   }
-
-  const orderNumber = clientOrderNumber || `CMD-MOOV-${Date.now().toString().slice(-6)}`;
-  const now = new Date().toISOString();
-
-  const newOrder = {
-    id: orderId || 'ord_' + Date.now(),
-    orderNumber,
-    userId,
-    userEmail,
-    userName,
-    cvId: cvId || '',
-    cvTitle: cvTitle || 'Mon CV Professionnel',
-    planId: selectedPlan.id,
-    planName: selectedPlan.name,
-    planCode,
-    amountXOF: selectedPlan.priceXOF,
-    currency: 'XOF',
-    operator: 'moov_money',
-    beneficiaryName: 'Waaliyou Z Labouda',
-    beneficiaryPhone: '0194537741',
-    status: 'pending_payment',
-    createdAt: now,
-    updatedAt: now
-  };
-
-  orders.unshift(newOrder);
-  saveOrders(orders);
-
-  res.status(201).json({ success: true, order: newOrder });
 });
 
-// 5. Déclaration manuelle de transaction Moov Money
-app.post('/api/orders/declare', (req, res) => {
-  const { orderId, transactionRef, amountDeclared, senderPhone, transactionDate, notes, proofUrl } = req.body;
+// 5. Déclaration manuelle de transaction Moov Money (anti-fraude & montant exact)
+app.post('/api/orders/declare', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const { orderId, transactionRef, amountDeclared, senderPhone, transactionDate, notes, proofUrl } = req.body || {};
 
-  if (!orderId || !transactionRef || !senderPhone) {
-    return res.status(400).json({
-      success: false,
-      error: 'La référence de transaction et le numéro de téléphone expéditeur sont obligatoires.'
-    });
+    if (!orderId || !transactionRef || !senderPhone) {
+      return res.status(400).json({
+        success: false,
+        error: 'La référence de transaction et le numéro de téléphone expéditeur sont obligatoires.'
+      });
+    }
+
+    const cleanRef = String(transactionRef).trim().toUpperCase();
+    if (cleanRef.length < 4 || cleanRef.length > 64) {
+      return res.status(400).json({
+        success: false,
+        error: 'Format de référence Moov Money invalide (4 à 64 caractères requis).'
+      });
+    }
+
+    const order = await db.getOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Commande introuvable.' });
+    }
+    if (order.userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Vous ne pouvez pas déclarer le paiement d’un autre compte.' });
+    }
+
+    if (order.status === 'approved') {
+      return res.status(400).json({ success: false, error: 'Cette commande a déjà été validée.' });
+    }
+    if (order.status === 'rejected') {
+      return res.status(400).json({ success: false, error: 'Cette commande a été rejetée. Créez une nouvelle commande.' });
+    }
+
+    // Vérification stricte du montant déclaré
+    const parsedAmount = Number(amountDeclared);
+    if (!Number.isFinite(parsedAmount) || parsedAmount !== order.amountXOF) {
+      return res.status(400).json({
+        success: false,
+        error: `Le montant déclaré (${amountDeclared || 0} FCFA) doit correspondre exactement au tarif de l’offre (${order.amountXOF} FCFA).`
+      });
+    }
+
+    // Validation de la preuve image si fournie
+    const cleanProof = String(proofUrl || '');
+    if (cleanProof) {
+      if (!/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(cleanProof)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Format de capture d’écran invalide (PNG, JPG ou WebP uniquement).'
+        });
+      }
+      if (cleanProof.length > 4.5 * 1024 * 1024) {
+        return res.status(400).json({
+          success: false,
+          error: 'Capture d’écran trop volumineuse (max 3 Mo).'
+        });
+      }
+    }
+
+    // Anti-doublon strict : ni déjà validée ni déjà soumise sur une autre commande en attente, ni archivée dans payments
+    const allOrders = await db.getOrders();
+    const duplicateOrder = allOrders.find(
+      (o) =>
+        o.id !== orderId &&
+        (o.status === 'approved' || o.status === 'pending_verification') &&
+        String(o.submission?.transactionRef || '').trim().toUpperCase() === cleanRef
+    );
+    if (duplicateOrder) {
+      return res.status(400).json({
+        success: false,
+        error: `Cette référence de transaction (${cleanRef}) est déjà associée à une autre commande.`
+      });
+    }
+
+    const allPayments = await db.getPayments();
+    const duplicatePayment = allPayments.find(
+      (p) => String(p.providerReference || '').trim().toUpperCase() === cleanRef
+    );
+    if (duplicatePayment) {
+      return res.status(400).json({
+        success: false,
+        error: `Cette référence de transaction (${cleanRef}) a déjà été comptabilisée.`
+      });
+    }
+
+    order.submission = {
+      transactionRef: cleanRef,
+      amountDeclared: parsedAmount,
+      senderPhone: String(senderPhone).trim().slice(0, 32),
+      transactionDate: transactionDate ? String(transactionDate).trim() : new Date().toISOString().split('T')[0],
+      notes: String(notes || '').trim().slice(0, 300),
+      proofUrl: cleanProof,
+      submittedAt: new Date().toISOString()
+    };
+    order.status = 'pending_verification';
+    order.updatedAt = new Date().toISOString();
+
+    const saved = await db.upsertOrder(order);
+    await db.addAuditLog(
+      authUser.id,
+      authUser.email,
+      `Déclaration Moov Money ${order.orderNumber} (${parsedAmount} FCFA - Réf: ${cleanRef})`,
+      'order',
+      order.id
+    );
+
+    res.json({ success: true, order: saved });
+  } catch (err: any) {
+    console.error('[Declare Order Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur lors de la déclaration du paiement.' });
   }
-
-  const cleanRef = String(transactionRef).trim().toUpperCase();
-  const orders = loadOrders();
-  const order = orders.find((o) => o.id === orderId);
-
-  if (!order) {
-    return res.status(404).json({ success: false, error: 'Commande introuvable.' });
-  }
-
-  if (order.status === 'approved') {
-    return res.status(400).json({ success: false, error: 'Cette commande a déjà été validée.' });
-  }
-
-  // Contrôle anti-doublon strict de la référence Moov Money
-  const duplicate = orders.find(
-    (o) => o.id !== orderId && o.status === 'approved' && o.submission?.transactionRef === cleanRef
-  );
-
-  if (duplicate) {
-    return res.status(400).json({
-      success: false,
-      error: `Cette référence de transaction (${cleanRef}) a déjà été validée pour une autre commande.`
-    });
-  }
-
-  order.submission = {
-    transactionRef: cleanRef,
-    amountDeclared: Number(amountDeclared) || order.amountXOF,
-    senderPhone: String(senderPhone).trim(),
-    transactionDate: transactionDate ? String(transactionDate).trim() : new Date().toISOString().split('T')[0],
-    notes: String(notes || '').trim(),
-    proofUrl: proofUrl || '',
-    submittedAt: new Date().toISOString()
-  };
-  order.status = 'pending_verification';
-  order.updatedAt = new Date().toISOString();
-
-  saveOrders(orders);
-  res.json({ success: true, order });
 });
 
-// 6. Récupération des commandes d'un utilisateur
-app.get('/api/orders/user/:userId', (req, res) => {
-  const { userId } = req.params;
-  const orders = loadOrders();
-  const userOrders = orders.filter((o) => o.userId === userId);
-  res.json({ success: true, orders: userOrders });
+// 6. Récupération des commandes d'un utilisateur (isolation stricte)
+app.get('/api/orders/user/:userId', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const { userId } = req.params;
+    if (userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Accès interdit aux commandes d’un autre compte.' });
+    }
+    const userOrders = await db.getOrders(userId);
+    res.json({ success: true, orders: userOrders });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture commandes.' });
+  }
 });
 
 // 6b. Historique archivé des paiements et activations d'un utilisateur
-app.get('/api/payments/user/:userId', (req, res) => {
-  const { userId } = req.params;
-  const payments = loadPayments();
-  const userPayments = payments.filter((p) => p.userId === userId);
-  res.json({ success: true, payments: userPayments });
+app.get('/api/payments/user/:userId', requireAuth, async (req, res) => {
+  try {
+    const authUser: ServerUser = (req as any).authUser;
+    const { userId } = req.params;
+    if (userId !== authUser.id && authUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Accès interdit à l’historique financier d’un autre compte.' });
+    }
+    const userPayments = await db.getPayments(userId);
+    res.json({ success: true, payments: userPayments });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture paiements.' });
+  }
 });
 
+// -------------------------------------------------------------------
+// ROUTES API ADMINISTRATION (RBAC STRICT)
+// -------------------------------------------------------------------
+
 // 7. Administration : liste de toutes les commandes
-app.get('/api/admin/orders', checkAdminAuth, (req, res) => {
-  const orders = loadOrders();
-  res.json({ success: true, orders });
+app.get('/api/admin/orders', checkAdminAuth, async (_req, res) => {
+  try {
+    const orders = await db.getOrders();
+    res.json({ success: true, orders });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture commandes admin.' });
+  }
 });
 
 // 8. Administration : statistiques réelles et KPIs
-app.get('/api/admin/metrics', checkAdminAuth, (req, res) => {
-  const users = loadUsers();
-  const cvs = loadCVs();
-  const orders = loadOrders();
+app.get('/api/admin/metrics', checkAdminAuth, async (_req, res) => {
+  try {
+    const [users, cvs, orders, payments] = await Promise.all([
+      db.getUsers(),
+      db.getCVs(),
+      db.getOrders(),
+      db.getPayments()
+    ]);
 
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const sevenDaysAgo = Date.now() - 7 * 86400000;
-  const thirtyDaysAgo = Date.now() - 30 * 86400000;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const sevenDaysAgo = Date.now() - 7 * 86400000;
+    const thirtyDaysAgo = Date.now() - 30 * 86400000;
 
-  const newUsersToday = users.filter((u) => new Date(u.createdAt).getTime() >= todayStart).length;
-  const newUsers7Days = users.filter((u) => new Date(u.createdAt).getTime() >= sevenDaysAgo).length;
-  const newUsers30Days = users.filter((u) => new Date(u.createdAt).getTime() >= thirtyDaysAgo).length;
-  const suspendedUsersCount = users.filter((u) => u.isSuspended === true).length;
-  const activeUsersCount = users.length - suspendedUsersCount;
+    const newUsersToday = users.filter((u) => new Date(u.createdAt).getTime() >= todayStart).length;
+    const newUsers7Days = users.filter((u) => new Date(u.createdAt).getTime() >= sevenDaysAgo).length;
+    const newUsers30Days = users.filter((u) => new Date(u.createdAt).getTime() >= thirtyDaysAgo).length;
+    const suspendedUsersCount = users.filter((u) => u.isSuspended === true).length;
+    const activeUsersCount = users.length - suspendedUsersCount;
 
-  const approvedOrders = orders.filter((o) => o.status === 'approved');
-  const pendingOrders = orders.filter((o) => o.status === 'pending_verification' || o.status === 'pending_payment');
-  const rejectedOrders = orders.filter((o) => o.status === 'rejected');
+    const approvedOrders = orders.filter((o) => o.status === 'approved');
+    const pendingOrders = orders.filter((o) => o.status === 'pending_verification' || o.status === 'pending_payment');
+    const rejectedOrders = orders.filter((o) => o.status === 'rejected');
 
-  const totalRevenueXOF = approvedOrders.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
+    const totalRevenueXOF = approvedOrders.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
 
-  const candOrders = approvedOrders.filter((o) => o.planCode === 'cand_24h' || o.planCode === 'premium_7d');
-  const careerOrders = approvedOrders.filter((o) => o.planCode === 'career_30d' || o.planCode === 'plus_30d');
+    const candOrders = approvedOrders.filter((o) => o.planCode === 'cand_24h' || o.planCode === 'premium_7d');
+    const careerOrders = approvedOrders.filter((o) => o.planCode === 'career_30d' || o.planCode === 'plus_30d');
 
-  const salesByPlan = {
-    cand_24h: { count: candOrders.length, revenue: candOrders.reduce((s, o) => s + (o.amountXOF || 500), 0) },
-    career_30d: { count: careerOrders.length, revenue: careerOrders.reduce((s, o) => s + (o.amountXOF || 1000), 0) }
-  };
+    const salesByPlan = {
+      cand_24h: { count: candOrders.length, revenue: candOrders.reduce((s, o) => s + (o.amountXOF || 500), 0) },
+      career_30d: { count: careerOrders.length, revenue: careerOrders.reduce((s, o) => s + (o.amountXOF || 1000), 0) }
+    };
 
-  const dailyEvolution: any[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000);
-    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const dayEnd = dayStart + 86400000;
-    const dateLabel = d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+    const dailyEvolution: any[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const dayEnd = dayStart + 86400000;
+      const dateLabel = d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
 
-    const dayUsers = users.filter((u) => {
-      const t = new Date(u.createdAt).getTime();
-      return t >= dayStart && t < dayEnd;
-    }).length;
+      const dayUsers = users.filter((u) => {
+        const t = new Date(u.createdAt).getTime();
+        return t >= dayStart && t < dayEnd;
+      }).length;
 
-    const dayOrders = approvedOrders.filter((o) => {
-      const t = new Date(o.createdAt).getTime();
-      return t >= dayStart && t < dayEnd;
-    });
+      const dayOrders = approvedOrders.filter((o) => {
+        const t = new Date(o.createdAt).getTime();
+        return t >= dayStart && t < dayEnd;
+      });
 
-    dailyEvolution.push({
-      date: dateLabel,
-      users: dayUsers,
-      orders: dayOrders.length,
-      revenue: dayOrders.reduce((sum, o) => sum + o.amountXOF, 0)
-    });
-  }
-
-  res.json({
-    success: true,
-    metrics: {
-      totalUsers: users.length,
-      newUsersToday,
-      newUsers7Days,
-      newUsers30Days,
-      activeUsersCount,
-      suspendedUsersCount,
-      totalCVs: cvs.length,
-      totalOrders: orders.length,
-      pendingPaymentsCount: pendingOrders.length,
-      approvedPaymentsCount: approvedOrders.length,
-      rejectedPaymentsCount: rejectedOrders.length,
-      totalRevenueXOF,
-      salesByPlan,
-      dailyEvolution
+      dailyEvolution.push({
+        date: dateLabel,
+        users: dayUsers,
+        orders: dayOrders.length,
+        revenue: dayOrders.reduce((sum, o) => sum + o.amountXOF, 0)
+      });
     }
-  });
+
+    res.json({
+      success: true,
+      metrics: {
+        totalUsers: users.length,
+        newUsersToday,
+        newUsers7Days,
+        newUsers30Days,
+        activeUsersCount,
+        suspendedUsersCount,
+        totalCVs: cvs.length,
+        totalOrders: orders.length,
+        pendingPaymentsCount: pendingOrders.length,
+        approvedPaymentsCount: approvedOrders.length,
+        rejectedPaymentsCount: rejectedOrders.length,
+        totalRevenueXOF,
+        salesByPlan,
+        dailyEvolution,
+        recentPayments: payments.slice(0, 20),
+        manualOrders: orders
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur calcul statistiques admin.' });
+  }
 });
 
 // 9. Administration : liste des utilisateurs avec métadonnées
-app.get('/api/admin/users', checkAdminAuth, (req, res) => {
-  const users = loadUsers();
-  const cvs = loadCVs();
-  const orders = loadOrders();
+app.get('/api/admin/users', checkAdminAuth, async (_req, res) => {
+  try {
+    const [users, cvs, orders] = await Promise.all([db.getUsers(), db.getCVs(), db.getOrders()]);
 
-  const enrichedUsers = users.map((u) => {
-    const userCVs = cvs.filter((c: any) => c.userId === u.id);
-    const userOrders = orders.filter((o: any) => o.userId === u.id);
-    const approved = userOrders.filter((o: any) => o.status === 'approved');
-    const totalSpentXOF = approved.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
+    const enrichedUsers = users.map((u) => {
+      const userCVs = cvs.filter((c: any) => c.userId === u.id);
+      const userOrders = orders.filter((o: any) => o.userId === u.id);
+      const approved = userOrders.filter((o: any) => o.status === 'approved');
+      const totalSpentXOF = approved.reduce((sum, o) => sum + (o.amountXOF || 0), 0);
 
-    return {
-      id: u.id,
-      email: u.email,
-      firstName: u.firstName,
-      lastName: u.lastName,
-      phoneNumber: u.phoneNumber,
-      countryCode: u.countryCode,
-      role: u.role,
-      isSuspended: u.isSuspended || false,
-      suspendedReason: u.suspendedReason,
-      suspendedAt: u.suspendedAt,
-      subscription: u.subscription,
-      cvCount: userCVs.length,
-      ordersCount: userOrders.length,
-      totalSpentXOF,
-      createdAt: u.createdAt,
-      updatedAt: u.updatedAt
-    };
-  });
+      return {
+        id: u.id,
+        email: u.email,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        phoneNumber: u.phoneNumber,
+        countryCode: u.countryCode,
+        role: u.role,
+        isSuspended: u.isSuspended || false,
+        suspendedReason: u.suspendedReason,
+        suspendedAt: u.suspendedAt,
+        subscription: u.subscription,
+        cvCount: userCVs.length,
+        ordersCount: userOrders.length,
+        totalSpentXOF,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt
+      };
+    });
 
-  res.json({ success: true, users: enrichedUsers });
+    res.json({ success: true, users: enrichedUsers });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture utilisateurs admin.' });
+  }
 });
 
 // 10. Administration : modification des informations d'un utilisateur
-app.post('/api/admin/users/update', checkAdminAuth, (req, res) => {
-  const { userId, firstName, lastName, phoneNumber, role } = req.body;
-  const admin = (req as any).adminUser;
+app.post('/api/admin/users/update', checkAdminAuth, async (req, res) => {
+  try {
+    const { userId, firstName, lastName, phoneNumber, role } = req.body || {};
+    const admin: ServerUser = (req as any).adminUser;
 
-  const users = loadUsers();
-  const user = users.find((u) => u.id === userId);
-  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+    const users = await db.getUsers();
+    const user = users.find((u) => u.id === userId);
+    if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
 
-  if (firstName) user.firstName = String(firstName).trim();
-  if (lastName) user.lastName = String(lastName).trim();
-  if (phoneNumber) user.phoneNumber = String(phoneNumber).trim();
-  if (role && (role === 'user' || role === 'admin')) user.role = role;
-  user.updatedAt = new Date().toISOString();
-  saveUsers(users);
+    if (firstName) user.firstName = String(firstName).trim().slice(0, 80);
+    if (lastName) user.lastName = String(lastName).trim().slice(0, 80);
+    if (phoneNumber !== undefined) user.phoneNumber = String(phoneNumber).trim().slice(0, 32);
+    if (role && (role === 'user' || role === 'admin')) {
+      if (user.email.toLowerCase() === 'admin@cvprobenin.bj' && role !== 'admin') {
+        return res.status(400).json({ success: false, error: 'Impossible de rétrograder le compte admin racine.' });
+      }
+      user.role = role;
+    }
+    user.updatedAt = new Date().toISOString();
+    await db.upsertUser(user);
 
-  addServerAuditLog(
-    admin?.id || 'admin_master',
-    admin?.email || 'admin@cvprobenin.bj',
-    `Mise à jour administrative des informations de ${user.email}`,
-    'user',
-    user.id
-  );
+    await db.addAuditLog(
+      admin.id,
+      admin.email,
+      `Mise à jour administrative des informations de ${user.email}`,
+      'user',
+      user.id
+    );
 
-  res.json({ success: true, user: sanitizeUser(user) });
+    res.json({ success: true, user: sanitizeUser(user) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur mise à jour utilisateur.' });
+  }
 });
 
 // 11. Administration : suspension d'un utilisateur
-app.post('/api/admin/users/suspend', checkAdminAuth, (req, res) => {
-  const { userId, reason } = req.body;
-  const admin = (req as any).adminUser;
+app.post('/api/admin/users/suspend', checkAdminAuth, async (req, res) => {
+  try {
+    const { userId, reason } = req.body || {};
+    const admin: ServerUser = (req as any).adminUser;
 
-  const users = loadUsers();
-  const user = users.find((u) => u.id === userId);
-  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
-  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
-    return res.status(400).json({ success: false, error: 'Impossible de suspendre le compte administrateur maître.' });
+    const users = await db.getUsers();
+    const user = users.find((u) => u.id === userId);
+    if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+    if (user.role === 'admin' && user.email.toLowerCase() === 'admin@cvprobenin.bj') {
+      return res.status(400).json({ success: false, error: 'Impossible de suspendre le compte administrateur maître.' });
+    }
+
+    user.isSuspended = true;
+    user.suspendedReason = String(reason || 'Activité suspecte ou non conforme').trim();
+    user.suspendedAt = new Date().toISOString();
+    delete user.token;
+    delete user.tokenExpiresAt;
+    user.updatedAt = new Date().toISOString();
+    await db.upsertUser(user);
+
+    await db.addAuditLog(
+      admin.id,
+      admin.email,
+      `Suspension du compte ${user.email} (${user.firstName} ${user.lastName}). Motif : ${user.suspendedReason}`,
+      'user',
+      user.id
+    );
+
+    res.json({ success: true, user: sanitizeUser(user) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur suspension utilisateur.' });
   }
-
-  user.isSuspended = true;
-  user.suspendedReason = String(reason || 'Activité suspecte ou non conforme').trim();
-  user.suspendedAt = new Date().toISOString();
-  user.updatedAt = new Date().toISOString();
-  saveUsers(users);
-
-  addServerAuditLog(
-    admin?.id || 'admin_master',
-    admin?.email || 'admin@cvprobenin.bj',
-    `Suspension du compte ${user.email} (${user.firstName} ${user.lastName}). Motif : ${user.suspendedReason}`,
-    'user',
-    user.id
-  );
-
-  res.json({ success: true, user: sanitizeUser(user) });
 });
 
 // 12. Administration : réactivation d'un utilisateur suspendu
-app.post('/api/admin/users/reactivate', checkAdminAuth, (req, res) => {
-  const { userId } = req.body;
-  const admin = (req as any).adminUser;
+app.post('/api/admin/users/reactivate', checkAdminAuth, async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    const admin: ServerUser = (req as any).adminUser;
 
-  const users = loadUsers();
-  const user = users.find((u) => u.id === userId);
-  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+    const users = await db.getUsers();
+    const user = users.find((u) => u.id === userId);
+    if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
 
-  user.isSuspended = false;
-  delete user.suspendedReason;
-  delete user.suspendedAt;
-  user.updatedAt = new Date().toISOString();
-  saveUsers(users);
+    user.isSuspended = false;
+    delete user.suspendedReason;
+    delete user.suspendedAt;
+    user.updatedAt = new Date().toISOString();
+    await db.upsertUser(user);
 
-  addServerAuditLog(
-    admin?.id || 'admin_master',
-    admin?.email || 'admin@cvprobenin.bj',
-    `Réactivation du compte ${user.email} (${user.firstName} ${user.lastName})`,
-    'user',
-    user.id
-  );
+    await db.addAuditLog(
+      admin.id,
+      admin.email,
+      `Réactivation du compte ${user.email} (${user.firstName} ${user.lastName})`,
+      'user',
+      user.id
+    );
 
-  res.json({ success: true, user: sanitizeUser(user) });
+    res.json({ success: true, user: sanitizeUser(user) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur réactivation utilisateur.' });
+  }
 });
 
 // 13. Administration : suppression sécurisée d'un compte
-app.post('/api/admin/users/delete', checkAdminAuth, (req, res) => {
-  const { userId } = req.body;
-  const admin = (req as any).adminUser;
+app.post('/api/admin/users/delete', checkAdminAuth, async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    const admin: ServerUser = (req as any).adminUser;
 
-  let users = loadUsers();
-  const user = users.find((u) => u.id === userId);
-  if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
-  if (user.role === 'admin' && user.email === 'admin@cvprobenin.bj') {
-    return res.status(400).json({ success: false, error: 'Impossible de supprimer l’administrateur principal.' });
+    const users = await db.getUsers();
+    const user = users.find((u) => u.id === userId);
+    if (!user) return res.status(404).json({ success: false, error: 'Utilisateur introuvable.' });
+    if (user.role === 'admin' && user.email.toLowerCase() === 'admin@cvprobenin.bj') {
+      return res.status(400).json({ success: false, error: 'Impossible de supprimer l’administrateur principal.' });
+    }
+
+    await db.deleteCVsByUser(userId);
+    await db.deleteUser(userId);
+
+    await db.addAuditLog(
+      admin.id,
+      admin.email,
+      `Suppression définitive du compte ${user.email} (${user.firstName} ${user.lastName})`,
+      'user',
+      userId
+    );
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur suppression compte.' });
   }
-
-  users = users.filter((u) => u.id !== userId);
-  saveUsers(users);
-
-  addServerAuditLog(
-    admin?.id || 'admin_master',
-    admin?.email || 'admin@cvprobenin.bj',
-    `Suppression définitive du compte ${user.email} (${user.firstName} ${user.lastName})`,
-    'user',
-    userId
-  );
-
-  res.json({ success: true });
 });
 
-// 14. Administration : approbation manuelle d'une commande
-app.post('/api/admin/orders/approve', checkAdminAuth, (req, res) => {
-  const { orderId, adminId, adminEmail, checkAccount, checkAmount } = req.body;
+// 14. Administration : approbation manuelle d'une commande Moov Money (calcul strict + anti-double validation)
+app.post('/api/admin/orders/approve', checkAdminAuth, async (req, res) => {
+  try {
+    const { orderId, checkAccount, checkAmount } = req.body || {};
+    const adminActor: ServerUser = (req as any).adminUser;
 
-  if (!checkAccount || !checkAmount) {
-    return res.status(400).json({
-      success: false,
-      error: 'Veuillez attester avoir vérifié le relevé Moov Money et la correspondance exacte de référence.'
-    });
-  }
+    if (!checkAccount || !checkAmount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Veuillez attester avoir vérifié le relevé Moov Money et la correspondance exacte de référence.'
+      });
+    }
 
-  const orders = loadOrders();
-  const order = orders.find((o) => o.id === orderId);
+    const order = await db.getOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Commande introuvable.' });
+    }
 
-  if (!order) {
-    return res.status(404).json({ success: false, error: 'Commande introuvable.' });
-  }
+    if (order.status === 'approved') {
+      return res.status(400).json({ success: false, error: 'Cette commande a déjà été approuvée.' });
+    }
 
-  if (order.status === 'approved') {
-    return res.status(400).json({ success: false, error: 'Cette commande a déjà été approuvée.' });
-  }
+    if (order.status !== 'pending_verification') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cette commande ne contient pas encore de déclaration de transaction Moov Money à vérifier.'
+      });
+    }
 
-  // Protection anti-double validation : même référence Moov Money déjà approuvée
-  const txRef = order.submission?.transactionRef ? String(order.submission.transactionRef).trim().toUpperCase() : '';
-  if (txRef) {
-    const alreadyValidatedRef = orders.find(
-      (o) => o.id !== orderId && o.status === 'approved' && String(o.submission?.transactionRef || '').trim().toUpperCase() === txRef
+    const txRef = order.submission?.transactionRef
+      ? String(order.submission.transactionRef).trim().toUpperCase()
+      : '';
+    if (!txRef) {
+      return res.status(400).json({
+        success: false,
+        error: 'Référence de transaction Moov Money manquante.'
+      });
+    }
+
+    // Protection anti-double validation sur orders + payments
+    const [allOrders, allPayments] = await Promise.all([db.getOrders(), db.getPayments()]);
+    const alreadyValidatedRef = allOrders.find(
+      (o) =>
+        o.id !== orderId &&
+        o.status === 'approved' &&
+        String(o.submission?.transactionRef || '').trim().toUpperCase() === txRef
     );
     if (alreadyValidatedRef) {
       return res.status(400).json({
@@ -1226,269 +1342,314 @@ app.post('/api/admin/orders/approve', checkAdminAuth, (req, res) => {
         error: `La référence Moov Money ${txRef} a déjà été validée pour la commande ${alreadyValidatedRef.orderNumber}.`
       });
     }
-  }
+    const alreadyArchivedPayment = allPayments.find(
+      (p) => String(p.providerReference || '').trim().toUpperCase() === txRef
+    );
+    if (alreadyArchivedPayment) {
+      return res.status(400).json({
+        success: false,
+        error: `La référence Moov Money ${txRef} figure déjà dans le registre des paiements validés.`
+      });
+    }
 
-  const adminActor = (req as any).adminUser;
-  const is30Days = order.planCode === 'career_30d' || order.planCode === 'plus_30d';
-  const durationMs = is30Days ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    const is30Days = order.planCode === 'career_30d' || order.planCode === 'plus_30d';
+    const durationMs = is30Days ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
 
-  const now = new Date();
-  const nowIso = now.toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
 
-  // Mise à jour de la commande
-  order.status = 'approved';
-  order.decision = {
-    adminId: adminActor?.id || adminId || 'admin_master',
-    adminEmail: adminActor?.email || adminEmail || 'admin@cvprobenin.bj',
-    decisionDate: nowIso
-  };
-  order.updatedAt = nowIso;
-  saveOrders(orders);
+    order.status = 'approved';
+    order.decision = {
+      adminId: adminActor.id,
+      adminEmail: adminActor.email,
+      decisionDate: nowIso
+    };
+    order.updatedAt = nowIso;
+    await db.upsertOrder(order);
 
-  // Mise à jour des droits spécifiques au CV cible associé à l'utilisateur (calcul strict côté serveur)
-  const cvs = loadCVs();
-  let targetCV = order.cvId
-    ? cvs.find((c: any) => c.id === order.cvId && (!c.userId || !order.userId || c.userId === order.userId))
-    : null;
-  if (!targetCV && !order.cvId && order.userId) {
-    targetCV = cvs.find((c: any) => c.userId === order.userId);
-  }
+    // Activation ciblée sur le CV précis de l'utilisateur (24h ou 30j calculés strictement côté serveur)
+    let targetCV = order.cvId ? await db.getCVById(order.cvId) : null;
+    if (targetCV && targetCV.userId && targetCV.userId !== order.userId) {
+      targetCV = null;
+    }
 
-  let expiresAtDate: Date;
-  if (targetCV) {
-    const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
-    if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
-      expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
+    let expiresAtDate: Date;
+    if (targetCV) {
+      const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
+      if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
+        expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
+      } else {
+        expiresAtDate = new Date(now.getTime() + durationMs);
+      }
+
+      targetCV.access = {
+        planCode: is30Days ? 'career_30d' : 'cand_24h',
+        planName: is30Days ? 'Pack Carrière (30 jours)' : 'Accès Candidature (24h)',
+        status: 'active',
+        approvedAt: nowIso,
+        expiresAt: expiresAtDate.toISOString(),
+        orderId: order.id,
+        orderNumber: order.orderNumber
+      };
+      targetCV.updatedAt = nowIso;
+      await db.upsertCV(targetCV);
     } else {
       expiresAtDate = new Date(now.getTime() + durationMs);
     }
 
-    targetCV.access = {
-      planCode: order.planCode,
-      planName: order.planName,
-      status: 'active',
-      approvedAt: nowIso,
-      expiresAt: expiresAtDate.toISOString(),
+    // Si Pack Carrière 30 jours, met également à jour le quota de création (15 CV) sur le compte
+    if (is30Days && order.userId) {
+      const users = await db.getUsers();
+      const buyer = users.find((u) => u.id === order.userId);
+      if (buyer) {
+        buyer.subscription = {
+          id: 'sub_' + Date.now(),
+          userId: buyer.id,
+          planId: 'plan_career_30d',
+          planCode: 'career_30d',
+          status: 'active',
+          startsAt: nowIso,
+          expiresAt: expiresAtDate.toISOString(),
+          createdAt: nowIso
+        };
+        buyer.updatedAt = nowIso;
+        await db.upsertUser(buyer);
+      }
+    }
+
+    // Conservation permanente de l'historique des paiements et activations
+    await db.addPayment({
+      id: 'pay_' + Date.now() + '_' + crypto.randomBytes(2).toString('hex'),
       orderId: order.id,
-      orderNumber: order.orderNumber
-    };
-    targetCV.updatedAt = nowIso;
-    saveCVs(cvs);
-  } else {
-    expiresAtDate = new Date(now.getTime() + durationMs);
+      orderNumber: order.orderNumber,
+      userId: order.userId,
+      cvId: order.cvId || targetCV?.id || '',
+      planId: order.planId,
+      planName: order.planName,
+      planCode: order.planCode,
+      provider: 'moov_money',
+      providerReference: txRef,
+      amountXOF: order.amountXOF,
+      currency: 'XOF',
+      status: 'confirmed',
+      confirmedAt: nowIso,
+      expiresAt: expiresAtDate.toISOString(),
+      createdAt: nowIso
+    });
+
+    await db.addAuditLog(
+      adminActor.id,
+      adminActor.email,
+      `Validation du paiement commande ${order.orderNumber} (${order.amountXOF} FCFA - Moov: ${txRef})`,
+      'order',
+      order.id
+    );
+
+    res.json({
+      success: true,
+      order,
+      targetCVAccess: targetCV?.access || null,
+      expiresAt: expiresAtDate.toISOString()
+    });
+  } catch (err: any) {
+    console.error('[Approve Order Error]', err);
+    res.status(500).json({ success: false, error: 'Erreur lors de la validation de la commande.' });
   }
-
-  // Conservation permanente de l'historique des paiements et activations
-  const payments = loadPayments();
-  payments.unshift({
-    id: 'pay_' + Date.now(),
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    userId: order.userId,
-    cvId: order.cvId || targetCV?.id || '',
-    planId: order.planId,
-    planName: order.planName,
-    planCode: order.planCode,
-    provider: 'moov_money',
-    providerReference: txRef || order.orderNumber,
-    amountXOF: order.amountXOF,
-    currency: 'XOF',
-    status: 'confirmed',
-    confirmedAt: nowIso,
-    expiresAt: expiresAtDate.toISOString(),
-    createdAt: nowIso
-  });
-  savePayments(payments);
-
-  addServerAuditLog(
-    adminActor?.id || adminId || 'admin_master',
-    adminActor?.email || adminEmail || 'admin@cvprobenin.bj',
-    `Validation du paiement commande ${order.orderNumber} (${order.amountXOF} FCFA - Moov: ${txRef || 'N/A'})`,
-    'order',
-    order.id
-  );
-
-  res.json({
-    success: true,
-    order,
-    targetCVAccess: targetCV?.access || null,
-    expiresAt: expiresAtDate.toISOString()
-  });
 });
 
 // 15. Administration : rejet d'une déclaration non conforme
-app.post('/api/admin/orders/reject', checkAdminAuth, (req, res) => {
-  const { orderId, adminId, adminEmail, reason } = req.body;
+app.post('/api/admin/orders/reject', checkAdminAuth, async (req, res) => {
+  try {
+    const { orderId, reason } = req.body || {};
+    const adminActor: ServerUser = (req as any).adminUser;
 
-  if (!reason || !reason.trim()) {
-    return res.status(400).json({ success: false, error: 'Un motif explicatif de rejet est obligatoire.' });
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ success: false, error: 'Un motif explicatif de rejet est obligatoire.' });
+    }
+
+    const order = await db.getOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Commande introuvable.' });
+    }
+
+    if (order.status === 'approved') {
+      return res.status(400).json({
+        success: false,
+        error: 'Impossible de rejeter une commande déjà approuvée et créditée.'
+      });
+    }
+
+    const now = new Date().toISOString();
+    order.status = 'rejected';
+    order.decision = {
+      adminId: adminActor.id,
+      adminEmail: adminActor.email,
+      decisionDate: now,
+      rejectionReason: String(reason).trim().slice(0, 300)
+    };
+    order.updatedAt = now;
+    await db.upsertOrder(order);
+
+    await db.addAuditLog(
+      adminActor.id,
+      adminActor.email,
+      `Rejet de la commande ${order.orderNumber}. Motif : ${order.decision.rejectionReason}`,
+      'order',
+      order.id
+    );
+
+    res.json({ success: true, order });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lors du rejet de la commande.' });
   }
-
-  const orders = loadOrders();
-  const order = orders.find((o) => o.id === orderId);
-
-  if (!order) {
-    return res.status(404).json({ success: false, error: 'Commande introuvable.' });
-  }
-
-  if (order.status === 'approved') {
-    return res.status(400).json({
-      success: false,
-      error: 'Impossible de rejeter une commande déjà approuvée et créditée.'
-    });
-  }
-
-  const now = new Date().toISOString();
-  order.status = 'rejected';
-  order.decision = {
-    adminId: adminId || 'admin_master',
-    adminEmail: adminEmail || 'admin@cvprobenin.bj',
-    decisionDate: now,
-    rejectionReason: reason.trim()
-  };
-  order.updatedAt = now;
-  saveOrders(orders);
-
-  addServerAuditLog(
-    adminId || 'admin_master',
-    adminEmail || 'admin@cvprobenin.bj',
-    `Rejet de la commande ${order.orderNumber}. Motif : ${order.decision.rejectionReason}`,
-    'order',
-    order.id
-  );
-
-  res.json({ success: true, order });
 });
 
 // 16. Administration : liste de tous les CV créés
-app.get('/api/admin/cvs', checkAdminAuth, (req, res) => {
-  const cvs = loadCVs();
-  const users = loadUsers();
+app.get('/api/admin/cvs', checkAdminAuth, async (_req, res) => {
+  try {
+    const [cvs, users] = await Promise.all([db.getCVs(), db.getUsers()]);
 
-  const enrichedCVs = cvs.map((c: any) => {
-    const owner = users.find((u) => u.id === c.userId);
-    return {
-      ...c,
-      ownerName: owner ? `${owner.firstName} ${owner.lastName}` : (c.personalInfo ? `${c.personalInfo.firstName} ${c.personalInfo.lastName}` : 'Invité'),
-      ownerEmail: owner ? owner.email : (c.personalInfo?.email || 'N/A')
-    };
-  });
+    const enrichedCVs = cvs.map((c: any) => {
+      const owner = users.find((u) => u.id === c.userId);
+      return {
+        ...c,
+        ownerName: owner
+          ? `${owner.firstName} ${owner.lastName}`
+          : c.personalInfo
+          ? `${c.personalInfo.firstName || ''} ${c.personalInfo.lastName || ''}`.trim() || 'Invité'
+          : 'Invité',
+        ownerEmail: owner ? owner.email : c.personalInfo?.email || 'N/A'
+      };
+    });
 
-  res.json({ success: true, cvs: enrichedCVs });
+    res.json({ success: true, cvs: enrichedCVs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture CVs admin.' });
+  }
 });
 
 // 17. Administration : suppression légitime d'un CV
-app.delete('/api/admin/cvs/:id', checkAdminAuth, (req, res) => {
-  const { id } = req.params;
-  const admin = (req as any).adminUser;
+app.delete('/api/admin/cvs/:id', checkAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const admin: ServerUser = (req as any).adminUser;
 
-  const cvs = loadCVs();
-  const target = cvs.find((c: any) => c.id === id);
-  if (!target) return res.status(404).json({ success: false, error: 'CV introuvable.' });
+    const target = await db.getCVById(id);
+    if (!target) return res.status(404).json({ success: false, error: 'CV introuvable.' });
 
-  const filtered = cvs.filter((c: any) => c.id !== id);
-  saveCVs(filtered);
+    await db.deleteCV(id);
+    await db.addAuditLog(
+      admin.id,
+      admin.email,
+      `Suppression administrative du CV ${id} (${target.title})`,
+      'cv',
+      id
+    );
 
-  addServerAuditLog(
-    admin?.id || 'admin_master',
-    admin?.email || 'admin@cvprobenin.bj',
-    `Suppression administrative du CV ${id} (${target.title})`,
-    'cv',
-    id
-  );
-
-  res.json({ success: true });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur suppression CV admin.' });
+  }
 });
 
 // 18. Administration : attribution manuelle exceptionnelle d'un forfait
-app.post('/api/admin/subscriptions/grant', checkAdminAuth, (req, res) => {
-  const { userId, cvId, planCode, reason } = req.body;
-  const admin = (req as any).adminUser;
+app.post('/api/admin/subscriptions/grant', checkAdminAuth, async (req, res) => {
+  try {
+    const { userId, cvId, planCode, reason } = req.body || {};
+    const admin: ServerUser = (req as any).adminUser;
 
-  if (!reason || !reason.trim()) {
-    return res.status(400).json({ success: false, error: 'Un motif d’attribution exceptionnelle est obligatoire.' });
-  }
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ success: false, error: 'Un motif d’attribution exceptionnelle est obligatoire.' });
+    }
 
-  const is30Days = planCode === 'career_30d' || planCode === 'plus_30d';
-  const durationMs = is30Days ? 30 * 86400000 : 86400000;
-  const planName = is30Days ? 'Pack Carrière (30 jours)' : 'Accès Candidature (24h)';
-  const now = new Date();
-  const nowIso = now.toISOString();
+    const is30Days = planCode === 'career_30d' || planCode === 'plus_30d';
+    const durationMs = is30Days ? 30 * 86400000 : 86400000;
+    const planName = is30Days ? 'Pack Carrière (30 jours)' : 'Accès Candidature (24h)';
+    const now = new Date();
+    const nowIso = now.toISOString();
 
-  // Mettre à jour le CV
-  const cvs = loadCVs();
-  let targetCV = cvId ? cvs.find((c: any) => c.id === cvId) : null;
-  if (!targetCV && userId) {
-    targetCV = cvs.find((c: any) => c.userId === userId);
-  }
+    let targetCV = cvId ? await db.getCVById(cvId) : null;
+    if (!targetCV && userId) {
+      const userCVs = await db.getCVs(userId);
+      targetCV = userCVs[0] || null;
+    }
 
-  let expiresAtDate: Date;
-  if (targetCV) {
-    const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
-    if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
-      expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
+    let expiresAtDate: Date;
+    if (targetCV) {
+      const currentExpiry = targetCV.access?.expiresAt ? new Date(targetCV.access.expiresAt) : null;
+      if (currentExpiry && currentExpiry.getTime() > now.getTime()) {
+        expiresAtDate = new Date(currentExpiry.getTime() + durationMs);
+      } else {
+        expiresAtDate = new Date(now.getTime() + durationMs);
+      }
+
+      targetCV.access = {
+        planCode: is30Days ? 'career_30d' : 'cand_24h',
+        planName,
+        status: 'active',
+        approvedAt: nowIso,
+        expiresAt: expiresAtDate.toISOString(),
+        orderId: 'admin_grant_' + Date.now(),
+        orderNumber: 'ACCÈS-MANUEL'
+      };
+      targetCV.updatedAt = nowIso;
+      await db.upsertCV(targetCV);
     } else {
       expiresAtDate = new Date(now.getTime() + durationMs);
     }
 
-    targetCV.access = {
-      planCode: is30Days ? 'career_30d' : 'cand_24h',
-      planName,
-      status: 'active',
-      approvedAt: nowIso,
-      expiresAt: expiresAtDate.toISOString(),
-      orderId: 'admin_grant_' + Date.now(),
-      orderNumber: 'ACCÈS-MANUEL'
-    };
-    targetCV.updatedAt = nowIso;
-    saveCVs(cvs);
-  } else {
-    expiresAtDate = new Date(now.getTime() + durationMs);
-  }
-
-  // Mettre à jour l'abonnement du compte utilisateur
-  if (userId) {
-    const users = loadUsers();
-    const user = users.find((u) => u.id === userId);
-    if (user) {
-      user.subscription = {
-        id: 'sub_' + Date.now(),
-        userId,
-        planId: is30Days ? 'plan_career_30d' : 'plan_cand_24h',
-        planCode: is30Days ? 'career_30d' : 'cand_24h',
-        status: 'active',
-        startsAt: nowIso,
-        expiresAt: expiresAtDate.toISOString(),
-        createdAt: nowIso
-      };
-      saveUsers(users);
+    if (userId) {
+      const users = await db.getUsers();
+      const user = users.find((u) => u.id === userId);
+      if (user) {
+        user.subscription = {
+          id: 'sub_' + Date.now(),
+          userId,
+          planId: is30Days ? 'plan_career_30d' : 'plan_cand_24h',
+          planCode: is30Days ? 'career_30d' : 'cand_24h',
+          status: 'active',
+          startsAt: nowIso,
+          expiresAt: expiresAtDate.toISOString(),
+          createdAt: nowIso
+        };
+        user.updatedAt = nowIso;
+        await db.upsertUser(user);
+      }
     }
+
+    await db.addAuditLog(
+      admin.id,
+      admin.email,
+      `Attribution manuelle du forfait ${planName} (${planCode}) au CV ${cvId || 'utilisateur ' + userId}. Motif : ${String(reason).trim()}`,
+      'plan',
+      cvId || userId
+    );
+
+    res.json({
+      success: true,
+      planName,
+      expiresAt: expiresAtDate.toISOString(),
+      cvAccess: targetCV?.access || null
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur attribution manuelle.' });
   }
-
-  addServerAuditLog(
-    admin?.id || 'admin_master',
-    admin?.email || 'admin@cvprobenin.bj',
-    `Attribution manuelle du forfait ${planName} (${planCode}) au CV ${cvId || 'utilisateur ' + userId}. Motif : ${reason}`,
-    'plan',
-    cvId || userId
-  );
-
-  res.json({
-    success: true,
-    planName,
-    expiresAt: expiresAtDate.toISOString(),
-    cvAccess: targetCV?.access || null
-  });
 });
 
 // 19. Administration : journal d'audit des actions
-app.get('/api/admin/logs', checkAdminAuth, (req, res) => {
-  const logs = loadAuditLogs();
-  res.json({ success: true, logs });
+app.get('/api/admin/logs', checkAdminAuth, async (_req, res) => {
+  try {
+    const logs = await db.getAuditLogs();
+    res.json({ success: true, logs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Erreur lecture logs audit.' });
+  }
 });
 
-// 10. Configuration publique de l'application
-app.get('/api/config', (req, res) => {
+// -------------------------------------------------------------------
+// CONFIGURATION PUBLIQUE (AUCUNE CLÉ SECRÈTE)
+// -------------------------------------------------------------------
+app.get('/api/config', (_req, res) => {
   res.json({
     brandName: 'CV Pro Bénin',
     currency: 'FCFA',
@@ -1496,29 +1657,35 @@ app.get('/api/config', (req, res) => {
     targetCountry: 'BJ',
     phonePrefix: '+229',
     supportPhone: '+229 01 94 53 77 41',
-    contactEmail: 'contact@cvprobenin.bj',
+    contactEmail: process.env.SUPPORT_EMAIL || 'contact@cvprobenin.bj',
     paymentsAvailable: true,
     moovBeneficiary: {
-      name: 'Waaliyou Z Labouda',
-      number: '0194537741',
+      name: process.env.MOOV_BENEFICIARY_NAME || 'Waaliyou Z Labouda',
+      number: process.env.MOOV_BENEFICIARY_PHONE || '0194537741',
       operator: 'Moov Money Bénin',
-      ussdCode: '*855#'
+      ussdCode: process.env.MOOV_USSD_CODE || '*855#'
     }
   });
 });
 
-// 2. Proxy d'assistance à la rédaction IA (clé non exposée au client)
-app.post('/api/ai/enhance', async (req, res) => {
-  const { type, text, jobTitle, context, cvData } = req.body;
-  const client = getAiClient();
+// -------------------------------------------------------------------
+// PROXY GEMINI IA (PROTÉGÉ PAR RATE LIMITER & PLAFONNEMENT DE COÛTS)
+// -------------------------------------------------------------------
+app.post('/api/ai/enhance', aiRateAndQuotaMiddleware, async (req, res) => {
+  const { type, text = '', jobTitle = '', context = '', cvData } = req.body || {};
+  const safeText = String(text || '').slice(0, 6000);
+  const safeJobTitle = String(jobTitle || 'Professionnel').slice(0, 120);
+  const safeContext = String(context || '').slice(0, 1000);
 
-  if (!client) {
+  const aiBundle = await getAiClient();
+  if (!aiBundle) {
     return res.json({
       success: false,
       isAI: false,
       message: "Clé Gemini serveur non configurée. L'application utilise les modèles heuristiques prédéfinis."
     });
   }
+  const { client, ThinkingLevel } = aiBundle;
 
   try {
     let prompt = '';
@@ -1526,17 +1693,17 @@ app.post('/api/ai/enhance', async (req, res) => {
 
     if (type === 'summary') {
       prompt = `Tu es un expert en recrutement au Bénin et en Afrique de l'Ouest.
-Améliore et dynamise ce résumé professionnel pour le poste de "${jobTitle || 'Professionnel'}" :
-Texte original : "${text || ''}"
-Contexte : "${context || ''}"
-Règles : N'invente aucun diplôme, expérience ou compétence fictive. Rédige en français soigné, percutant et concis (3 à 5 phrases). Renvoie UNIQUEMENT le texte amélioré.`;
+Améliore et dynamise ce résumé professionnel pour le poste de "${safeJobTitle}" :
+Texte original : "${safeText}"
+Contexte : "${safeContext}"
+Règles strictes : N'invente aucun diplôme, expérience ou compétence fictive. Rédige en français soigné, percutant et concis (3 à 5 phrases). Renvoie UNIQUEMENT le texte amélioré.`;
     } else if (type === 'experience') {
-      prompt = `En tant qu'expert RH au Bénin, reformule cette expérience pour "${jobTitle}" avec des verbes d'action au format liste à puces sans inventer de faits fictifs :
-"${text || ''}"
+      prompt = `En tant qu'expert RH au Bénin, reformule cette expérience pour "${safeJobTitle}" avec des verbes d'action au format liste à puces sans inventer de faits fictifs :
+"${safeText}"
 Renvoie directement le texte reformulé.`;
     } else if (type === 'grammar') {
       prompt = `Corrige l'orthographe, la grammaire et le style professionnel de ce texte de CV en français sans en changer le sens ni inventer d'informations :
-"${text || ''}"
+"${safeText}"
 Renvoie UNIQUEMENT le texte corrigé.`;
     } else if (type === 'cv_audit' && cvData) {
       prompt = `Tu es un auditeur RH expert au Bénin. Évalue objectivement ce CV sans rien inventer et renvoie EXCLUSIVEMENT un JSON valide :
@@ -1549,15 +1716,15 @@ Renvoie UNIQUEMENT le texte corrigé.`;
 Données réelles du CV :
 ${JSON.stringify({
   jobTitle: cvData.personalInfo?.jobTitle,
-  summary: cvData.profileSummary,
-  experiences: cvData.experiences,
-  educations: cvData.educations,
-  skills: cvData.skills?.map((s: any) => s.name),
-  languages: cvData.languages
+  summary: String(cvData.profileSummary || '').slice(0, 1500),
+  experiences: Array.isArray(cvData.experiences) ? cvData.experiences.slice(0, 8) : [],
+  educations: Array.isArray(cvData.educations) ? cvData.educations.slice(0, 6) : [],
+  skills: Array.isArray(cvData.skills) ? cvData.skills.slice(0, 25).map((s: any) => s.name) : [],
+  languages: Array.isArray(cvData.languages) ? cvData.languages.slice(0, 8) : []
 })}`;
     } else if (type === 'cover_letter' && cvData) {
       prompt = `Tu es un conseiller carrière expert au Bénin. Rédige une lettre de motivation professionnelle en français (format sobre, 3 paragraphes + formule de politesse) en utilisant EXCLUSIVEMENT les informations réelles de ce CV (n'invente aucun diplôme, expérience ou compétence).
-${text ? `Offre d'emploi ciblée :\n${String(text).slice(0, 2500)}\n` : ''}
+${safeText ? `Offre d'emploi ciblée :\n${safeText.slice(0, 2500)}\n` : ''}
 CV du candidat :
 ${JSON.stringify({
   fullName: `${cvData.personalInfo?.firstName || ''} ${cvData.personalInfo?.lastName || ''}`.trim(),
@@ -1565,14 +1732,14 @@ ${JSON.stringify({
   phone: cvData.personalInfo?.phone,
   email: cvData.personalInfo?.email,
   jobTitle: cvData.personalInfo?.jobTitle,
-  summary: cvData.profileSummary,
-  experiences: cvData.experiences?.slice(0, 4),
-  educations: cvData.educations?.slice(0, 3),
-  skills: cvData.skills?.map((s: any) => s.name)
+  summary: String(cvData.profileSummary || '').slice(0, 1000),
+  experiences: Array.isArray(cvData.experiences) ? cvData.experiences.slice(0, 4) : [],
+  educations: Array.isArray(cvData.educations) ? cvData.educations.slice(0, 3) : [],
+  skills: Array.isArray(cvData.skills) ? cvData.skills.slice(0, 15).map((s: any) => s.name) : []
 })}
 Renvoie UNIQUEMENT le texte complet de la lettre de motivation.`;
     } else {
-      prompt = `Propose 6 compétences clés recherchées au Bénin pour le métier de "${jobTitle}". Sépare par des virgules.`;
+      prompt = `Propose 6 compétences clés réalistes recherchées au Bénin pour le métier de "${safeJobTitle}". Sépare par des virgules.`;
     }
 
     let responseText = '';
@@ -1624,7 +1791,7 @@ Renvoie UNIQUEMENT le texte complet de la lettre de motivation.`;
 });
 
 // 2b. Analyse du CV par rapport à une offre d'emploi (sans inventer de données)
-app.post('/api/ai/job-match', async (req, res) => {
+app.post('/api/ai/job-match', aiRateAndQuotaMiddleware, async (req, res) => {
   const { cvData, jobOfferText } = req.body || {};
   if (!cvData || !jobOfferText || String(jobOfferText).trim().length < 20) {
     return res.status(400).json({
@@ -1633,14 +1800,15 @@ app.post('/api/ai/job-match', async (req, res) => {
     });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  const aiBundle = await getAiClient();
+  if (!aiBundle) {
     return res.json({
       success: false,
       isAI: false,
       message: 'Clé Gemini serveur non configurée.'
     });
   }
+  const { client, ThinkingLevel } = aiBundle;
 
   const prompt = `Tu es un expert en recrutement et ATS au Bénin.
 Analyse la compatibilité entre le CV réel du candidat et l'offre d'emploi fournie.
@@ -1661,11 +1829,11 @@ ${String(jobOfferText).slice(0, 4000)}
 CV du candidat :
 ${JSON.stringify({
   jobTitle: cvData.personalInfo?.jobTitle,
-  summary: cvData.profileSummary,
-  experiences: cvData.experiences,
-  educations: cvData.educations,
-  skills: cvData.skills?.map((s: any) => s.name),
-  languages: cvData.languages
+  summary: String(cvData.profileSummary || '').slice(0, 1500),
+  experiences: Array.isArray(cvData.experiences) ? cvData.experiences.slice(0, 8) : [],
+  educations: Array.isArray(cvData.educations) ? cvData.educations.slice(0, 6) : [],
+  skills: Array.isArray(cvData.skills) ? cvData.skills.slice(0, 25).map((s: any) => s.name) : [],
+  languages: Array.isArray(cvData.languages) ? cvData.languages.slice(0, 8) : []
 })}`;
 
   const candidateModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
@@ -1711,9 +1879,9 @@ function extractJpegsFromPdf(buffer: Buffer): Buffer[] {
   const images: Buffer[] = [];
   let pos = 0;
   while (pos < buffer.length) {
-    const start = buffer.indexOf(Buffer.from([0xFF, 0xD8, 0xFF]), pos);
+    const start = buffer.indexOf(Buffer.from([0xff, 0xd8, 0xff]), pos);
     if (start === -1) break;
-    const end = buffer.indexOf(Buffer.from([0xFF, 0xD9]), start + 3);
+    const end = buffer.indexOf(Buffer.from([0xff, 0xd9]), start + 3);
     if (end === -1) break;
     images.push(buffer.subarray(start, end + 2));
     pos = end + 2;
@@ -1724,7 +1892,7 @@ function extractJpegsFromPdf(buffer: Buffer): Buffer[] {
 function getJpegDimensions(buf: Buffer): { width: number; height: number } | null {
   let i = 0;
   while (i < buf.length - 8) {
-    if (buf[i] === 0xFF && (buf[i + 1] === 0xC0 || buf[i + 1] === 0xC2)) {
+    if (buf[i] === 0xff && (buf[i + 1] === 0xc0 || buf[i + 1] === 0xc2)) {
       const height = buf.readUInt16BE(i + 5);
       const width = buf.readUInt16BE(i + 7);
       return { width, height };
@@ -1747,7 +1915,6 @@ async function runOcrOnPdfBuffer(pdfBuffer: Buffer): Promise<string> {
     for (const img of images) {
       const dims = getJpegDimensions(img);
       if (dims && dims.width > 800) {
-        // Découpage bi-colonne pour préserver la distinction entre la colonne latérale et le corps principal
         const sidebarWidth = Math.round(dims.width * 0.35);
         const mainWidth = dims.width - sidebarWidth;
 
@@ -1772,24 +1939,28 @@ async function runOcrOnPdfBuffer(pdfBuffer: Buffer): Promise<string> {
     if (ocrWorker) {
       try {
         await ocrWorker.terminate();
-      } catch (e) {}
+      } catch (_e) {}
     }
   }
 }
 
 // 3. Extraction textuelle propre de document (PDF, DOCX, TXT)
-app.post('/api/cv/extract-text', async (req, res) => {
+app.post('/api/cv/extract-text', aiRateAndQuotaMiddleware, async (req, res) => {
   try {
-    const { fileBase64, mimeType, fileName, text } = req.body;
+    const { fileBase64, mimeType, fileName, text } = req.body || {};
     if (text && typeof text === 'string' && text.trim().length > 0) {
-      return res.json({ success: true, text: text.trim() });
+      return res.json({ success: true, text: text.trim().slice(0, 30000) });
     }
     if (!fileBase64) {
       return res.status(400).json({ success: false, error: 'Aucun contenu fourni.' });
     }
 
     const buffer = Buffer.from(fileBase64, 'base64');
-    const nameLower = (fileName || '').toLowerCase();
+    if (buffer.byteLength > 8 * 1024 * 1024) {
+      return res.status(413).json({ success: false, error: 'Fichier trop volumineux (max 8 Mo).' });
+    }
+
+    const nameLower = String(fileName || '').toLowerCase();
     const isPDF = mimeType === 'application/pdf' || nameLower.endsWith('.pdf');
     const isDOCX = nameLower.endsWith('.docx') || nameLower.endsWith('.doc') || (mimeType && mimeType.includes('word'));
     const isImage = mimeType?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(nameLower);
@@ -1808,10 +1979,11 @@ app.post('/api/cv/extract-text', async (req, res) => {
         console.warn('[PDFParse Server Warning]', pdfErr);
       }
 
-      // Si le PDF est un document image-only ou matriciel (aucune couche vectorielle de texte)
-      const isMinimalOrPageNumberOnly = !extractedText || extractedText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(extractedText.replace(/\s+/g, ' ').trim());
+      const isMinimalOrPageNumberOnly =
+        !extractedText ||
+        extractedText.length < 50 ||
+        /^--\s*\d+\s*of\s*\d+\s*--$/i.test(extractedText.replace(/\s+/g, ' ').trim());
       if (isMinimalOrPageNumberOnly) {
-        console.log('[Server] Document PDF matriciel / image détecté, lancement OCR Tesseract...');
         const ocrText = await runOcrOnPdfBuffer(buffer);
         if (ocrText && ocrText.length > 20) {
           extractedText = ocrText;
@@ -1829,7 +2001,6 @@ app.post('/api/cv/extract-text', async (req, res) => {
       }
     } else if (isImage) {
       try {
-        console.log('[Server] Fichier image détecté dans extract-text, lancement OCR Tesseract...');
         const { default: Tesseract } = await import('tesseract.js');
         const ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
         const resImg = await ocrWorker.recognize(buffer);
@@ -1846,7 +2017,7 @@ app.post('/api/cv/extract-text', async (req, res) => {
 
     res.json({
       success: true,
-      text: extractedText
+      text: extractedText.slice(0, 30000)
     });
   } catch (err: any) {
     console.error('Erreur extraction textuelle serveur:', err);
@@ -1857,20 +2028,22 @@ app.post('/api/cv/extract-text', async (req, res) => {
   }
 });
 
-// 4. Analyse et extraction intelligente de CV (PDF, DOCX, TXT, Images) avec repli infaillible
-app.post('/api/cv/parse', async (req, res) => {
-  const { fileBase64, mimeType, fileName, rawText } = req.body;
-  let docText = rawText || '';
+// 4. Analyse et extraction intelligente de CV (PDF, DOCX, TXT, Images) avec repli heuristique
+app.post('/api/cv/parse', aiRateAndQuotaMiddleware, async (req, res) => {
+  const { fileBase64, mimeType, fileName, rawText } = req.body || {};
+  let docText = String(rawText || '').slice(0, 30000);
 
-  // 1. Extraction si le texte n'a pas été préalablement extrait
   if ((!docText || docText.length < 40) && fileBase64) {
-    const nameLower = (fileName || '').toLowerCase();
+    const buffer = Buffer.from(fileBase64, 'base64');
+    if (buffer.byteLength > 8 * 1024 * 1024) {
+      return res.status(413).json({ success: false, error: 'Fichier trop volumineux (max 8 Mo).' });
+    }
+    const nameLower = String(fileName || '').toLowerCase();
     const isPDF = mimeType === 'application/pdf' || nameLower.endsWith('.pdf');
     const isDOCX = nameLower.endsWith('.docx') || nameLower.endsWith('.doc') || (mimeType && mimeType.includes('word'));
     const isImage = mimeType?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(nameLower);
 
     try {
-      const buffer = Buffer.from(fileBase64, 'base64');
       if (isPDF) {
         try {
           const { PDFParse } = await import('pdf-parse');
@@ -1883,9 +2056,11 @@ app.post('/api/cv/parse', async (req, res) => {
           console.warn('[Server PDFParse during parse error]', pErr);
         }
 
-        const isMinimal = !docText || docText.length < 50 || /^--\s*\d+\s*of\s*\d+\s*--$/i.test(docText.replace(/\s+/g, ' ').trim());
+        const isMinimal =
+          !docText ||
+          docText.length < 50 ||
+          /^--\s*\d+\s*of\s*\d+\s*--$/i.test(docText.replace(/\s+/g, ' ').trim());
         if (isMinimal) {
-          console.log('[Server] Document PDF matriciel dans /api/cv/parse, lancement OCR Tesseract...');
           const ocrText = await runOcrOnPdfBuffer(buffer);
           if (ocrText && ocrText.length > 20) {
             docText = ocrText;
@@ -1898,7 +2073,6 @@ app.post('/api/cv/parse', async (req, res) => {
           docText = docResult.value.trim();
         }
       } else if (isImage) {
-        console.log('[Server] Fichier image détecté dans /api/cv/parse, lancement OCR Tesseract...');
         const { default: Tesseract } = await import('tesseract.js');
         const ocrWorker = await Tesseract.createWorker(['fra', 'eng']);
         const resImg = await ocrWorker.recognize(buffer);
@@ -1914,11 +2088,11 @@ app.post('/api/cv/parse', async (req, res) => {
     }
   }
 
-  // 2. Tentative avec Gemini IA si disponible avec un délai d'attente court (max 5s)
-  const client = getAiClient();
+  const aiBundle = await getAiClient();
   let parsedJson: any = null;
 
-  if (client && docText && docText.length >= 30) {
+  if (aiBundle && docText && docText.length >= 30) {
+    const { client, ThinkingLevel } = aiBundle;
     try {
       const systemPrompt = `Tu es le moteur expert d'analyse et d'extraction de CV de "CV Pro Bénin".
 Extrais fidèlement, précisément et intégralement toutes les données de ce document de CV pour pré-remplir le constructeur de CV professionnel.
@@ -1988,7 +2162,9 @@ N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide 
               client.models.generateContent({
                 model,
                 contents: [
-                  { text: `${systemPrompt}\n\nVoici le contenu textuel extrait du CV à analyser fidèlement :\n\n${docText}` }
+                  {
+                    text: `${systemPrompt}\n\nVoici le contenu textuel extrait du CV à analyser fidèlement :\n\n${docText.slice(0, 16000)}`
+                  }
                 ],
                 config: {
                   responseMimeType: 'application/json',
@@ -2013,7 +2189,6 @@ N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide 
     }
   }
 
-  // Si Gemini a produit un résultat structuré valide
   if (parsedJson && (parsedJson.personalInfo || parsedJson.experiences || parsedJson.educations)) {
     return res.json({
       success: true,
@@ -2023,8 +2198,7 @@ N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide 
     });
   }
 
-  // 3. REPLI INFAILLIBLE : Analyse heuristique experte locale (toujours disponible et ultra-rapide)
-  console.log('[Server] Exécution de l\'analyse experte locale infaillible...');
+  const { parseCVText } = await import('./src/services/documentParser.ts');
   const parseResult = parseCVText(docText || fileName || '');
   return res.json({
     success: true,
@@ -2037,11 +2211,18 @@ N'invente aucune fausse information. Renvoie EXCLUSIVEMENT un objet JSON valide 
   });
 });
 
-// 3. Webhook pour notifications serveur-à-serveur Mobile Money (MTN / Moov / FedaPay)
+// 5. Webhook sécurisé pour notifications Mobile Money (vérification HMAC si WEBHOOK_SECRET configuré)
 app.post('/api/payments/webhook', (req, res) => {
-  const signature = req.headers['x-fedapay-signature'] || req.headers['x-webhook-signature'];
-  const payload = req.body;
+  const secret = process.env.WEBHOOK_SECRET;
+  const signature = String(req.headers['x-fedapay-signature'] || req.headers['x-webhook-signature'] || '');
+  if (secret) {
+    const expected = crypto.createHmac('sha256', secret).update(JSON.stringify(req.body || {})).digest('hex');
+    if (!signature || signature !== expected) {
+      return res.status(401).json({ received: false, error: 'Signature webhook invalide.' });
+    }
+  }
 
+  const payload = req.body;
   console.log('[Webhook Mobile Money reçu]', {
     event: payload?.event || 'transaction.updated',
     reference: payload?.id || payload?.reference,
@@ -2049,7 +2230,6 @@ app.post('/api/payments/webhook', (req, res) => {
     currency: payload?.currency || 'XOF'
   });
 
-  // Réponse 200 immédiate pour acquitter la réception du webhook auprès du prestataire
   res.status(200).json({ received: true, status: 'processed' });
 });
 
@@ -2057,26 +2237,43 @@ app.post('/api/payments/webhook', (req, res) => {
 // SERVEUR VITE (DEV) OU FICHIERS STATIQUES (PROD)
 // -------------------------------------------------------------------
 async function startServer() {
+  await db.init();
+
   if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false
-      },
-      appType: 'spa'
+    const vitePromise = (async () => {
+      const { createServer: createViteServer } = await import('vite');
+      return createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: false,
+          ws: false
+        },
+        appType: 'spa'
+      });
+    })();
+
+    vitePromise.catch((err) => {
+      console.error('[CV Pro Bénin] Erreur initialisation Vite dev:', err);
     });
-    app.use(vite.middlewares);
+
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
+    });
   } else {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.resolve(distPath, 'index.html'));
     });
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`[CV Pro Bénin] Serveur actif sur http://0.0.0.0:${port}`);
+    console.log(`[CV Pro Bénin] Serveur actif sur http://0.0.0.0:${port} (stockage: ${db.getMode()})`);
   });
 }
 

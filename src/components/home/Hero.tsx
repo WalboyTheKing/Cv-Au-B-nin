@@ -78,7 +78,7 @@ export const Hero: React.FC<HeroProps> = ({
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="text-xs font-semibold text-slate-700">Paiement MTN / Moov</span>
+                <span className="text-xs font-semibold text-slate-700">Paiement Moov Money (*855#)</span>
               </div>
             </div>
           </div>
@@ -91,8 +91,8 @@ export const Hero: React.FC<HeroProps> = ({
                 <Smartphone className="w-3.5 h-3.5" />
               </div>
               <div>
-                <p className="text-[11px] font-bold text-slate-900">Moov & MTN Money</p>
-                <p className="text-[9px] text-slate-500">Paiement direct en FCFA</p>
+                <p className="text-[11px] font-bold text-slate-900">Moov Money Bénin</p>
+                <p className="text-[9px] text-slate-500">Paiement vérifié en FCFA</p>
               </div>
             </div>
 

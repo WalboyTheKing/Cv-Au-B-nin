@@ -5,7 +5,44 @@
 
 import mammoth from 'mammoth';
 import type { CVData, Experience, Education, Skill, Language, CustomSection } from '../types/index.ts';
-import { INITIAL_DEMO_CV } from './storage.ts';
+
+function buildCleanBlankBaseCV(): CVData {
+  const now = new Date().toISOString();
+  return {
+    id: `cv_${Date.now()}`,
+    title: 'Nouveau CV Importé',
+    personalInfo: {
+      firstName: '',
+      lastName: '',
+      jobTitle: '',
+      email: '',
+      phone: '',
+      city: 'Cotonou',
+      country: 'Bénin',
+      address: '',
+      linkedIn: '',
+      website: '',
+      nationality: ''
+    },
+    profileSummary: '',
+    experiences: [],
+    educations: [],
+    skills: [],
+    languages: [],
+    customSections: [],
+    settings: {
+      templateId: 'moderne',
+      primaryColor: '#047857',
+      fontFamily: 'Inter',
+      fontSize: 'normal',
+      showPhoto: false,
+      margins: 'normal',
+      sectionOrder: ['profil', 'experiences', 'educations', 'skills', 'languages', 'certifications', 'projets', 'loisirs']
+    },
+    createdAt: now,
+    updatedAt: now
+  };
+}
 import { BENIN_CITIES } from '../config/index.ts';
 
 export interface ParseResult {
@@ -322,7 +359,7 @@ function buildResultFromFullCV(cv: CVData, sourceName: string): ParseResult {
  * Construit un objet CVData complet à partir de la réponse structurée de Gemini AI
  */
 function buildCVFromAIData(data: any, originalFileName: string): ParseResult {
-  const baseCV = JSON.parse(JSON.stringify(INITIAL_DEMO_CV)) as CVData;
+  const baseCV = buildCleanBlankBaseCV();
   const detectedFields: string[] = [];
   const warnings: string[] = [];
   const missingFields: string[] = [];
@@ -1582,7 +1619,7 @@ export function parseCVText(rawText: string): ParseResult {
     }
   }
 
-  const baseCV = JSON.parse(JSON.stringify(INITIAL_DEMO_CV)) as CVData;
+  const baseCV = buildCleanBlankBaseCV();
   const candidateName = `${firstName || ''} ${lastName || ''}`.trim() || 'Candidat';
 
   const finalCV: CVData = {

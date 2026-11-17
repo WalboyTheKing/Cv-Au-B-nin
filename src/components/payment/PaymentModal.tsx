@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CVData, ManualPaymentOrder, Plan, UserProfile } from '../../types';
 import { MOOV_MONEY_BENEFICIARY } from '../../config';
-import { paymentService } from '../../services/paymentService';
+import { storageService } from '../../services/storage';
 import {
   X,
   ShieldCheck,
@@ -52,7 +52,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [senderPhone, setSenderPhone] = useState<string>(currentUser.phoneNumber || '');
   const [transactionDate, setTransactionDate] = useState<string>(() => {
     const now = new Date();
-    return now.toISOString().slice(0, 16); // Format YYYY-MM-DDTHH:mm
+    return now.toISOString().slice(0, 16);
   });
   const [notes, setNotes] = useState<string>('');
   const [proofUrl, setProofUrl] = useState<string>('');
@@ -60,42 +60,51 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const initKeyRef = useRef<string>('');
 
-  // Initialisation stable de la commande à l'ouverture de la modale (une seule fois par session)
+  // Initialisation serveur sécurisée de la commande rattachée au compte et au CV précis
   useEffect(() => {
     if (!plan || plan.priceXOF <= 0) return;
+    const token = storageService.getAuthToken();
+    if (!token || !currentUser?.id || currentUser.id === 'guest_user') {
+      setErrorMsg('Veuillez vous connecter pour initier un paiement Moov Money sécurisé.');
+      return;
+    }
+
     const sessionKey = `${plan.id}_${currentUser.id}_${targetCV?.id || 'nocv'}`;
     if (initKeyRef.current === sessionKey) return;
     initKeyRef.current = sessionKey;
 
     setAmountDeclared(plan.priceXOF);
-    const res = paymentService.createOrder({
-      userId: currentUser.id,
-      userEmail: currentUser.email,
-      userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
-      planId: plan.id,
-      cvId: targetCV?.id,
-      cvTitle: targetCV?.title
-    });
-    if (res.success && res.order) {
-      setCurrentOrder(res.order);
-      onOrderCreated?.(res.order);
 
-      // Synchronisation asynchrone côté serveur avec le même ID de commande
-      fetch('/api/orders/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: res.order.id,
-          orderNumber: res.order.orderNumber,
-          userId: currentUser.id,
-          userEmail: currentUser.email,
-          userName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Candidat',
-          planCode: plan.code,
-          cvId: targetCV?.id,
-          cvTitle: targetCV?.title
-        })
-      }).catch((err) => console.warn('Serveur non joignable pour créer la commande', err));
-    }
+    const initServerOrder = async () => {
+      try {
+        let effectiveCV = targetCV || null;
+        if (effectiveCV) {
+          // Garantir que le CV cible existe côté serveur avant l'association de commande
+          await storageService.saveCVToServer({ ...effectiveCV, userId: currentUser.id });
+        }
+
+        const res = await fetch('/api/orders/create', {
+          method: 'POST',
+          headers: storageService.getAuthHeaders(true),
+          body: JSON.stringify({
+            planCode: plan.code,
+            cvId: effectiveCV?.id || `cv_account_${currentUser.id}`,
+            cvTitle: effectiveCV?.title || 'Mon CV Professionnel'
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success && data.order) {
+          setCurrentOrder(data.order);
+          onOrderCreated?.(data.order);
+          return;
+        }
+        setErrorMsg(data.error || 'Impossible d’initialiser la commande côté serveur.');
+      } catch {
+        setErrorMsg('Serveur inaccessible pour initialiser votre commande Moov Money.');
+      }
+    };
+
+    initServerOrder();
   }, [plan?.id, currentUser.id, targetCV?.id]);
 
   if (!plan) return null;
@@ -127,7 +136,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setErrorMsg('');
 
     if (!currentOrder) {
-      setErrorMsg('Erreur : commande de paiement non initialisée.');
+      setErrorMsg('Erreur : commande de paiement non initialisée sur le serveur.');
       return;
     }
 
@@ -144,47 +153,36 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Tentative de synchronisation serveur
-      try {
-        await fetch('/api/orders/declare', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            orderId: currentOrder.id,
-            transactionRef: transactionRef.trim(),
-            amountDeclared: Number(amountDeclared),
-            senderPhone: senderPhone.trim(),
-            transactionDate,
-            notes: notes.trim(),
-            proofUrl
-          })
-        });
-      } catch (netErr) {
-        console.warn('Serveur non joignable, enregistrement déclaration local', netErr);
-      }
-
-      const res = paymentService.submitDeclaration(currentOrder.id, {
-        transactionRef: transactionRef.trim(),
-        amountDeclared: Number(amountDeclared),
-        senderPhone: senderPhone.trim(),
-        transactionDate,
-        notes: notes.trim(),
-        proofUrl,
-        submittedAt: new Date().toISOString()
+      const serverRes = await fetch('/api/orders/declare', {
+        method: 'POST',
+        headers: storageService.getAuthHeaders(true),
+        body: JSON.stringify({
+          orderId: currentOrder.id,
+          transactionRef: transactionRef.trim(),
+          amountDeclared: Number(amountDeclared),
+          senderPhone: senderPhone.trim(),
+          transactionDate,
+          notes: notes.trim(),
+          proofUrl
+        })
       });
 
-      if (!res.success) {
-        setErrorMsg(res.error || 'Erreur lors de l’enregistrement de votre déclaration.');
+      const serverData = await serverRes.json();
+      if (!serverRes.ok || !serverData.success) {
+        setErrorMsg(serverData.error || 'Déclaration refusée par le serveur de paiement.');
         setIsSubmitting(false);
         return;
       }
 
-      if (res.order) {
-        setCurrentOrder(res.order);
+      if (serverData.order) {
+        setCurrentOrder(serverData.order);
       }
+      // Synchroniser le cache local avec la déclaration enregistrée côté serveur
+      await storageService.syncUserDataFromServer();
+      onPaymentSuccess?.(plan);
       setActiveStep('submitted');
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Erreur inattendue lors de la transmission.');
+      setErrorMsg(err?.message || 'Serveur inaccessible lors de la transmission de la déclaration.');
     } finally {
       setIsSubmitting(false);
     }

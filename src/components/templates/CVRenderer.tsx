@@ -72,7 +72,7 @@ export const CVRenderer: React.FC<CVRendererProps> = ({
 
   return (
     <div
-      className="relative flex justify-center print:m-0 print:p-0 select-text transition-all duration-150 mx-auto"
+      className="relative flex justify-center print:m-0 print:p-0 select-text transition-all duration-150 mx-auto overflow-x-clip"
       style={{
         width: `${scaledWidth}px`,
         minHeight: `${scaledHeight}px`,
@@ -106,6 +106,77 @@ export const CVRenderer: React.FC<CVRendererProps> = ({
     </div>
   );
 };
+
+function getPagePadding(margins?: 'narrow' | 'normal' | 'relaxed', wide = false): string {
+  if (margins === 'narrow') return 'p-6';
+  if (margins === 'relaxed') return wide ? 'p-12' : 'p-10';
+  return wide ? 'p-10' : 'p-8';
+}
+
+function ExtraSectionsBlock({
+  cv,
+  color,
+  includeLanguages = true,
+  headingClass = 'text-xs font-bold uppercase tracking-wider mb-2',
+  borderBottom = false
+}: {
+  cv: CVData;
+  color: string;
+  includeLanguages?: boolean;
+  headingClass?: string;
+  borderBottom?: boolean;
+}) {
+  const activeCustom = (cv.customSections || []).filter((s) => s.enabled && s.items.length > 0);
+  const langs = includeLanguages ? cv.languages || [] : [];
+
+  if (langs.length === 0 && activeCustom.length === 0) return null;
+
+  return (
+    <div className="space-y-4 mt-5">
+      {langs.length > 0 && (
+        <div className="break-inside-avoid">
+          <h2
+            className={`${headingClass} ${borderBottom ? 'border-b pb-1' : ''}`}
+            style={{ color, borderColor: borderBottom ? `${color}50` : undefined }}
+          >
+            Langues
+          </h2>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-700">
+            {langs.map((l) => (
+              <div key={l.id} className="flex justify-between">
+                <span className="font-medium">{l.name}</span>
+                <span className="text-slate-500 capitalize">{l.level}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeCustom.map((sec) => (
+        <div key={sec.id} className="break-inside-avoid">
+          <h2
+            className={`${headingClass} ${borderBottom ? 'border-b pb-1' : ''}`}
+            style={{ color, borderColor: borderBottom ? `${color}50` : undefined }}
+          >
+            {sec.title}
+          </h2>
+          <div className="space-y-1.5 text-xs">
+            {sec.items.map((it) => (
+              <div key={it.id}>
+                <div className="flex justify-between font-semibold text-slate-800">
+                  <span>{it.title}</span>
+                  {it.date && <span className="text-[10px] text-slate-500">{it.date}</span>}
+                </div>
+                {it.subtitle && <div className="text-[11px] text-slate-600 italic">{it.subtitle}</div>}
+                {it.description && <div className="text-[11px] text-slate-500">{it.description}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function renderTemplateContent(templateId: string, cv: CVData, color: string) {
   switch (templateId) {
@@ -155,20 +226,22 @@ function ModerneDynamique({ cv, color }: { cv: CVData; color: string }) {
       <div className="col-span-4 p-6 text-white flex flex-col justify-between" style={{ backgroundColor: color }}>
         <div>
           {/* Photo ou initiales */}
-          <div className="flex justify-center mb-5">
-            {personalInfo.photoUrl ? (
-              <img
-                src={personalInfo.photoUrl}
-                alt={`${personalInfo.firstName} ${personalInfo.lastName}`}
-                className="w-28 h-28 rounded-full object-cover border-4 border-white/30 shadow-md"
-              />
-            ) : (
-              <div className="w-24 h-24 rounded-full bg-white/20 border-2 border-white/40 flex items-center justify-center text-3xl font-bold tracking-wider text-white">
-                {personalInfo.firstName?.[0] || 'C'}
-                {personalInfo.lastName?.[0] || 'P'}
-              </div>
-            )}
-          </div>
+          {cv.settings?.showPhoto !== false && (
+            <div className="flex justify-center mb-5">
+              {personalInfo.photoUrl ? (
+                <img
+                  src={personalInfo.photoUrl}
+                  alt={`${personalInfo.firstName} ${personalInfo.lastName}`}
+                  className="w-28 h-28 rounded-full object-cover border-4 border-white/30 shadow-md"
+                />
+              ) : (
+                <div className="w-24 h-24 rounded-full bg-white/20 border-2 border-white/40 flex items-center justify-center text-3xl font-bold tracking-wider text-white">
+                  {personalInfo.firstName?.[0] || 'C'}
+                  {personalInfo.lastName?.[0] || 'P'}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Coordonnées */}
           <div className="space-y-2.5 text-xs mb-6">
@@ -258,7 +331,7 @@ function ModerneDynamique({ cv, color }: { cv: CVData; color: string }) {
       </div>
 
       {/* Contenu principal droite */}
-      <div className="col-span-8 p-8 flex flex-col justify-between">
+      <div className={`col-span-8 ${getPagePadding(cv.settings?.margins, false)} flex flex-col justify-between`}>
         <div>
           {/* Header Nom & Titre */}
           <div className="border-b pb-4 mb-6" style={{ borderColor: `${color}30` }}>
@@ -377,7 +450,7 @@ function ClassiqueInstitutionnel({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills, languages, customSections } = cv;
 
   return (
-    <div className="p-10 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, true)} text-slate-900 min-h-[297mm]`}>
       {/* En-tête centré institutionnel */}
       <div className="text-center pb-5 border-b-2" style={{ borderColor: color }}>
         <h1 className="text-2xl font-black tracking-wide uppercase text-slate-950">
@@ -524,7 +597,7 @@ function MinimalisteEpure({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills, languages } = cv;
 
   return (
-    <div className="p-10 text-slate-800 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, true)} text-slate-800 min-h-[297mm]`}>
       <div className="border-b pb-6 mb-6">
         <h1 className="text-3xl font-light tracking-tight text-slate-950">
           {personalInfo.firstName} <span className="font-extrabold">{personalInfo.lastName}</span>
@@ -631,6 +704,13 @@ function MinimalisteEpure({ cv, color }: { cv: CVData; color: string }) {
           </div>
         )}
       </div>
+
+      <ExtraSectionsBlock
+        cv={cv}
+        color={color}
+        includeLanguages={false}
+        headingClass="text-xs uppercase tracking-widest text-slate-400 font-bold mb-2"
+      />
     </div>
   );
 }
@@ -665,12 +745,12 @@ function PremierEmploiTremplin({ cv, color }: { cv: CVData; color: string }) {
             )}
           </div>
         </div>
-        {personalInfo.photoUrl && (
+        {cv.settings?.showPhoto !== false && personalInfo.photoUrl && (
           <img src={personalInfo.photoUrl} alt="" className="w-20 h-20 rounded-full border-2 border-white object-cover" />
         )}
       </div>
 
-      <div className="p-8 space-y-6">
+      <div className={`${getPagePadding(cv.settings?.margins, false)} space-y-6`}>
         {/* Compétences en avant pour jeune diplômé */}
         {skills && skills.length > 0 && (
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl break-inside-avoid">
@@ -729,6 +809,8 @@ function PremierEmploiTremplin({ cv, color }: { cv: CVData; color: string }) {
             </div>
           </div>
         )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} />
       </div>
     </div>
   );
@@ -738,10 +820,10 @@ function PremierEmploiTremplin({ cv, color }: { cv: CVData; color: string }) {
 // 5. MODÈLE ÉTUDIANT & STAGE ACADÉMIQUE
 // =========================================================================
 function EtudiantStageAcademique({ cv, color }: { cv: CVData; color: string }) {
-  const { personalInfo, experiences, educations, skills, languages } = cv;
+  const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="min-h-[297mm] p-8 text-slate-900">
+    <div className={`min-h-[297mm] ${getPagePadding(cv.settings?.margins, false)} text-slate-900`}>
       <div className="border-b-4 pb-4 mb-6" style={{ borderColor: color }}>
         <h1 className="text-2xl font-black uppercase text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-extrabold uppercase tracking-widest mt-0.5" style={{ color }}>{personalInfo.jobTitle}</p>
@@ -757,10 +839,18 @@ function EtudiantStageAcademique({ cv, color }: { cv: CVData; color: string }) {
           {personalInfo.linkedIn && (
             <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
           )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
+          )}
         </div>
       </div>
 
       <div className="space-y-6">
+        {cv.profileSummary && (
+          <div className="break-inside-avoid">
+            <p className="text-xs text-slate-600 leading-relaxed text-justify">{cv.profileSummary}</p>
+          </div>
+        )}
         {educations && educations.length > 0 && (
           <div>
             <h2 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color }}>
@@ -814,6 +904,8 @@ function EtudiantStageAcademique({ cv, color }: { cv: CVData; color: string }) {
             </div>
           </div>
         )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} />
       </div>
     </div>
   );
@@ -823,10 +915,10 @@ function EtudiantStageAcademique({ cv, color }: { cv: CVData; color: string }) {
 // 6. MODÈLE TECH & DÉVELOPPEUR WEB
 // =========================================================================
 function TechDeveloper({ cv, color }: { cv: CVData; color: string }) {
-  const { personalInfo, experiences, educations, skills, languages } = cv;
+  const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-8 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, false)} text-slate-900 min-h-[297mm]`}>
       <div className="bg-slate-900 text-white p-6 rounded-2xl mb-6 flex justify-between items-center shadow-xs">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -910,8 +1002,24 @@ function TechDeveloper({ cv, color }: { cv: CVData; color: string }) {
               </div>
             </div>
           )}
+
+          {cv.languages && cv.languages.length > 0 && (
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 break-inside-avoid">
+              <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-800 mb-2">// LANGUAGES</h2>
+              <div className="space-y-1 text-xs">
+                {cv.languages.map((l) => (
+                  <div key={l.id} className="flex justify-between">
+                    <span className="font-semibold text-slate-900">{l.name}</span>
+                    <span className="text-[10px] text-slate-500 font-mono">{l.level}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      <ExtraSectionsBlock cv={cv} color={color} includeLanguages={false} headingClass="text-xs font-mono font-bold uppercase tracking-wider text-slate-800 mb-2" />
     </div>
   );
 }
@@ -939,10 +1047,13 @@ function CommercialVente({ cv, color }: { cv: CVData; color: string }) {
           {personalInfo.linkedIn && (
             <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
           )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
+          )}
         </div>
       </div>
 
-      <div className="p-8 space-y-6">
+      <div className={`${getPagePadding(cv.settings?.margins, false)} space-y-6`}>
         {cv.profileSummary && (
           <div className="border-l-4 pl-4 italic text-xs text-slate-700 leading-relaxed break-inside-avoid" style={{ borderColor: color }}>
             « {cv.profileSummary} »
@@ -997,6 +1108,8 @@ function CommercialVente({ cv, color }: { cv: CVData; color: string }) {
             </div>
           )}
         </div>
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} />
       </div>
     </div>
   );
@@ -1009,7 +1122,7 @@ function ComptabiliteFinance({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-8 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, false)} text-slate-900 min-h-[297mm]`}>
       <div className="border-4 border-slate-900 p-6 mb-6">
         <div className="flex justify-between items-start">
           <div>
@@ -1024,6 +1137,7 @@ function ComptabiliteFinance({ cv, color }: { cv: CVData; color: string }) {
             {personalInfo.email && <div><CVInteractiveLink type="email" value={personalInfo.email} /></div>}
             <div>{personalInfo.city || 'Cotonou'}, Bénin</div>
             {personalInfo.linkedIn && <div><CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></div>}
+            {personalInfo.website && <div><CVInteractiveLink type="url" value={personalInfo.website} /></div>}
           </div>
         </div>
       </div>
@@ -1084,6 +1198,8 @@ function ComptabiliteFinance({ cv, color }: { cv: CVData; color: string }) {
             </div>
           )}
         </div>
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} borderBottom={true} />
       </div>
     </div>
   );
@@ -1096,7 +1212,7 @@ function EnseignantAcademique({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-10 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, true)} text-slate-900 min-h-[297mm]`}>
       <div className="border-b-2 pb-4 mb-6 text-center" style={{ borderColor: color }}>
         <h1 className="text-2xl font-serif font-black tracking-wide uppercase text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest mt-1" style={{ color }}>{personalInfo.jobTitle}</p>
@@ -1111,6 +1227,9 @@ function EnseignantAcademique({ cv, color }: { cv: CVData; color: string }) {
           <span>• {personalInfo.city || 'Cotonou'}, Bénin</span>
           {personalInfo.linkedIn && (
             <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
           )}
         </div>
       </div>
@@ -1157,6 +1276,21 @@ function EnseignantAcademique({ cv, color }: { cv: CVData; color: string }) {
             </div>
           </div>
         )}
+
+        {skills && skills.length > 0 && (
+          <div className="break-inside-avoid">
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2 font-serif" style={{ color }}>Compétences & Spécialités</h2>
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              {skills.map((s) => (
+                <span key={s.id} className="bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded font-medium">
+                  {s.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} headingClass="text-xs font-bold uppercase tracking-wider mb-2 font-serif" />
       </div>
     </div>
   );
@@ -1185,10 +1319,13 @@ function ExecutiveManagement({ cv, color }: { cv: CVData; color: string }) {
           {personalInfo.linkedIn && (
             <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} className="text-slate-300" /></span>
           )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} className="text-slate-300" /></span>
+          )}
         </div>
       </div>
 
-      <div className="p-8 space-y-6">
+      <div className={`${getPagePadding(cv.settings?.margins, false)} space-y-6`}>
         {cv.profileSummary && (
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 leading-relaxed break-inside-avoid">
             {cv.profileSummary}
@@ -1241,6 +1378,8 @@ function ExecutiveManagement({ cv, color }: { cv: CVData; color: string }) {
             </div>
           )}
         </div>
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} borderBottom={true} />
       </div>
     </div>
   );
@@ -1253,7 +1392,7 @@ function InternationalATS({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-10 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, true)} text-slate-900 min-h-[297mm]`}>
       <div className="border-b pb-4 mb-6">
         <h1 className="text-2xl font-black uppercase tracking-tight text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest text-slate-700 mt-0.5">{personalInfo.jobTitle}</p>
@@ -1329,6 +1468,8 @@ function InternationalATS({ cv, color }: { cv: CVData; color: string }) {
           </div>
         </div>
       )}
+
+      <ExtraSectionsBlock cv={cv} color="#64748b" includeLanguages={true} headingClass="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2" />
     </div>
   );
 }
@@ -1340,7 +1481,7 @@ function StagePerfectionnement({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-8 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, false)} text-slate-900 min-h-[297mm]`}>
       <div className="p-6 rounded-2xl text-white mb-6" style={{ backgroundColor: color }}>
         <h1 className="text-2xl font-black">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-xs font-bold uppercase tracking-widest mt-1 opacity-90">{personalInfo.jobTitle || 'Candidat au stage'}</p>
@@ -1352,14 +1493,22 @@ function StagePerfectionnement({ cv, color }: { cv: CVData; color: string }) {
           {personalInfo.email && (
             <span>• <CVInteractiveLink type="email" value={personalInfo.email} /></span>
           )}
-          <span>• Disponible immédiatement au Bénin</span>
+          <span>• {personalInfo.city || 'Bénin'} (Disponible immédiatement)</span>
           {personalInfo.linkedIn && (
             <span>• <CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></span>
+          )}
+          {personalInfo.website && (
+            <span>• <CVInteractiveLink type="url" value={personalInfo.website} /></span>
           )}
         </div>
       </div>
 
       <div className="space-y-6">
+        {cv.profileSummary && (
+          <div className="break-inside-avoid">
+            <p className="text-xs text-slate-600 leading-relaxed text-justify">{cv.profileSummary}</p>
+          </div>
+        )}
         {educations && educations.length > 0 && (
           <div>
             <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color }}>Formation Académique Actuelle</h2>
@@ -1407,6 +1556,8 @@ function StagePerfectionnement({ cv, color }: { cv: CVData; color: string }) {
             </div>
           </div>
         )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} />
       </div>
     </div>
   );
@@ -1419,12 +1570,19 @@ function TechnicienOperations({ cv, color }: { cv: CVData; color: string }) {
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-8 grid grid-cols-12 gap-6 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, false)} grid grid-cols-12 gap-6 min-h-[297mm]`}>
       <div className="col-span-8 space-y-6">
         <div className="border-b pb-4">
           <h1 className="text-2xl font-black text-slate-900">{personalInfo.firstName} {personalInfo.lastName}</h1>
           <p className="text-xs font-bold uppercase tracking-wider mt-1" style={{ color }}>{personalInfo.jobTitle}</p>
         </div>
+
+        {cv.profileSummary && (
+          <div className="break-inside-avoid">
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-1.5" style={{ color }}>Profil Technique</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">{cv.profileSummary}</p>
+          </div>
+        )}
 
         {experiences && experiences.length > 0 && (
           <div>
@@ -1443,6 +1601,25 @@ function TechnicienOperations({ cv, color }: { cv: CVData; color: string }) {
             </div>
           </div>
         )}
+
+        {educations && educations.length > 0 && (
+          <div className="break-inside-avoid">
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color }}>Diplômes & Certifications Techniques</h2>
+            <div className="space-y-2 text-xs">
+              {educations.map((edu) => (
+                <div key={edu.id} className="flex justify-between">
+                  <div>
+                    <div className="font-bold text-slate-900">{edu.degree}</div>
+                    <div className="text-[11px] text-slate-600">{edu.institution}</div>
+                  </div>
+                  <span className="text-slate-500">{edu.endDate}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={false} />
       </div>
 
       <div className="col-span-4 bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col justify-between">
@@ -1454,6 +1631,8 @@ function TechnicienOperations({ cv, color }: { cv: CVData; color: string }) {
               {personalInfo.phone && <div><CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-medium">WhatsApp direct</CVInteractiveLink></div>}
               {personalInfo.email && <div className="break-all"><CVInteractiveLink type="email" value={personalInfo.email} /></div>}
               <div>{personalInfo.city || 'Cotonou'}, Bénin</div>
+              {personalInfo.linkedIn && <div className="break-all"><CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></div>}
+              {personalInfo.website && <div className="break-all"><CVInteractiveLink type="url" value={personalInfo.website} /></div>}
             </div>
           </div>
 
@@ -1463,6 +1642,20 @@ function TechnicienOperations({ cv, color }: { cv: CVData; color: string }) {
               <div className="space-y-1 text-xs font-medium text-slate-800">
                 {skills.map((s) => (
                   <div key={s.id}>• {s.name}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {cv.languages && cv.languages.length > 0 && (
+            <div>
+              <h3 className="text-xs font-bold uppercase mb-2" style={{ color }}>Langues</h3>
+              <div className="space-y-1 text-xs text-slate-700">
+                {cv.languages.map((l) => (
+                  <div key={l.id} className="flex justify-between">
+                    <span className="font-medium">{l.name}</span>
+                    <span className="text-[10px] text-slate-500 capitalize">{l.level}</span>
+                  </div>
                 ))}
               </div>
             </div>
@@ -1481,12 +1674,19 @@ function SecretariatAdministration({ cv, color }: { cv: CVData; color: string })
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-8 grid grid-cols-12 gap-6 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, false)} grid grid-cols-12 gap-6 min-h-[297mm]`}>
       <div className="col-span-8 space-y-6">
         <div className="border-b pb-4">
           <h1 className="text-2xl font-black text-slate-900">{personalInfo.firstName} {personalInfo.lastName}</h1>
           <p className="text-xs font-bold uppercase tracking-wider mt-1" style={{ color }}>{personalInfo.jobTitle}</p>
         </div>
+
+        {cv.profileSummary && (
+          <div className="break-inside-avoid">
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-1.5" style={{ color }}>Profil Professionnel</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">{cv.profileSummary}</p>
+          </div>
+        )}
 
         {experiences && experiences.length > 0 && (
           <div>
@@ -1505,6 +1705,25 @@ function SecretariatAdministration({ cv, color }: { cv: CVData; color: string })
             </div>
           </div>
         )}
+
+        {educations && educations.length > 0 && (
+          <div className="break-inside-avoid">
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color }}>Formation & Diplômes</h2>
+            <div className="space-y-2 text-xs">
+              {educations.map((edu) => (
+                <div key={edu.id} className="flex justify-between">
+                  <div>
+                    <div className="font-bold text-slate-900">{edu.degree}</div>
+                    <div className="text-[11px] text-slate-600">{edu.institution}</div>
+                  </div>
+                  <span className="text-slate-500">{edu.endDate}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={false} />
       </div>
 
       <div className="col-span-4 bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
@@ -1515,7 +1734,8 @@ function SecretariatAdministration({ cv, color }: { cv: CVData; color: string })
             {personalInfo.phone && <div><CVInteractiveLink type="whatsapp" value={personalInfo.phone} className="text-emerald-700 font-medium">WhatsApp direct</CVInteractiveLink></div>}
             {personalInfo.email && <div className="break-all"><CVInteractiveLink type="email" value={personalInfo.email} /></div>}
             <div>{personalInfo.city || 'Cotonou'}, Bénin</div>
-            {personalInfo.linkedIn && <div><CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></div>}
+            {personalInfo.linkedIn && <div className="break-all"><CVInteractiveLink type="linkedin" value={personalInfo.linkedIn} /></div>}
+            {personalInfo.website && <div className="break-all"><CVInteractiveLink type="url" value={personalInfo.website} /></div>}
           </div>
         </div>
 
@@ -1526,6 +1746,20 @@ function SecretariatAdministration({ cv, color }: { cv: CVData; color: string })
               {skills.map((s) => (
                 <div key={s.id} className="bg-white p-1.5 rounded border border-slate-200">
                   {s.name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {cv.languages && cv.languages.length > 0 && (
+          <div>
+            <h3 className="text-xs font-bold uppercase mb-2" style={{ color }}>Langues</h3>
+            <div className="space-y-1 text-xs text-slate-700">
+              {cv.languages.map((l) => (
+                <div key={l.id} className="flex justify-between">
+                  <span className="font-medium">{l.name}</span>
+                  <span className="text-[10px] text-slate-500 capitalize">{l.level}</span>
                 </div>
               ))}
             </div>
@@ -1543,7 +1777,7 @@ function ProfessionnelChronologique({ cv, color }: { cv: CVData; color: string }
   const { personalInfo, experiences, educations, skills } = cv;
 
   return (
-    <div className="p-10 text-slate-900 min-h-[297mm]">
+    <div className={`${getPagePadding(cv.settings?.margins, true)} text-slate-900 min-h-[297mm]`}>
       <div className="border-b-4 pb-4 mb-6" style={{ borderColor: color }}>
         <h1 className="text-3xl font-black uppercase text-slate-950">{personalInfo.firstName} {personalInfo.lastName}</h1>
         <p className="text-sm font-bold uppercase tracking-wider mt-1 text-slate-700">{personalInfo.jobTitle}</p>
@@ -1610,6 +1844,23 @@ function ProfessionnelChronologique({ cv, color }: { cv: CVData; color: string }
             </div>
           </div>
         )}
+
+        {skills && skills.length > 0 && (
+          <div className="break-inside-avoid">
+            <h2 className="text-xs font-bold uppercase tracking-wider border-b pb-1 mb-2" style={{ color }}>
+              Compétences Clés
+            </h2>
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              {skills.map((s) => (
+                <span key={s.id} className="bg-slate-100 px-2.5 py-0.5 rounded font-medium text-slate-800">
+                  {s.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <ExtraSectionsBlock cv={cv} color={color} includeLanguages={true} borderBottom={true} />
       </div>
     </div>
   );

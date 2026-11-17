@@ -72,6 +72,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState<boolean>(false);
   const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState<string>('');
   const [deleteAccountLoading, setDeleteAccountLoading] = useState<boolean>(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string>('');
 
   // Horloge en temps réel pour le décompte seconde par seconde
   useEffect(() => {
@@ -80,6 +81,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    storageService.syncUserDataFromServer().then(() => {
+      onRefreshData();
+    });
+  }, [activeTab]);
 
   const manualOrders = storageService.getManualOrders(currentUser.id);
   const payments = storageService.getPayments(currentUser.id);
@@ -165,6 +172,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const handleDeleteAccount = async () => {
     if (deleteAccountConfirmText !== 'SUPPRIMER') return;
     setDeleteAccountLoading(true);
+    setDeleteAccountError('');
     try {
       const res = await storageService.deleteMyAccount();
       if (res.success) {
@@ -175,7 +183,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           window.location.href = '/';
         }
       } else {
-        alert(res.error || 'Impossible de supprimer le compte.');
+        setDeleteAccountError(res.error || 'Impossible de supprimer le compte.');
       }
     } finally {
       setDeleteAccountLoading(false);
@@ -513,10 +521,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => onEditCV(cvItem)}
-                            className="flex-1 px-3 py-2 bg-emerald-700 text-white rounded-xl text-xs font-bold hover:bg-emerald-800 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+                            className={`flex-1 px-3 py-2 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs ${
+                              isAccessExpired
+                                ? 'bg-amber-600 hover:bg-amber-700'
+                                : 'bg-emerald-700 hover:bg-emerald-800'
+                            }`}
                           >
-                            <Edit className="w-3.5 h-3.5" />
-                            <span>Modifier</span>
+                            {isAccessExpired ? <Lock className="w-3.5 h-3.5" /> : <Edit className="w-3.5 h-3.5" />}
+                            <span>{isAccessExpired ? 'Consulter' : 'Modifier'}</span>
                           </button>
 
                           <button
@@ -736,10 +748,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-500 block font-semibold">2. Modification & Conservation</span>
                   <span className="text-base font-bold text-emerald-800 mt-0.5 block">
-                    {accountPermissions.canEditCV ? 'Toujours autorisée' : 'Restreinte'}
+                    {accountPermissions.canEditCV ? 'Toujours conservés' : 'Restreinte'}
                   </span>
                   <span className="text-[11px] text-slate-500 mt-1 block">
-                    Vos CV expirés restent conservés et modifiables sans suppression.
+                    Vos CV expirés ne sont jamais supprimés ; leur réédition après expiration exige un renouvellement.
                   </span>
                 </div>
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
@@ -1096,12 +1108,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
               className="w-full p-2.5 rounded-xl border border-slate-300 text-center font-mono font-bold text-xs uppercase focus:ring-2 focus:ring-red-600 focus:outline-hidden"
             />
 
+            {deleteAccountError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{deleteAccountError}</span>
+              </div>
+            )}
+
             <div className="flex gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => {
                   setDeleteAccountModalOpen(false);
                   setDeleteAccountConfirmText('');
+                  setDeleteAccountError('');
                 }}
                 disabled={deleteAccountLoading}
                 className="flex-1 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"

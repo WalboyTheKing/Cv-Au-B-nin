@@ -250,6 +250,7 @@ export interface CVPermissions {
   canDownloadPDF: boolean;
   canDownloadCleanPDF: boolean;
   canUsePremiumFeatures: boolean;
+  isExpiredLocked: boolean;
   remainingSeconds: number;
   reason: string;
 }
@@ -267,6 +268,7 @@ export function getCVPermissions(
       canDownloadPDF: false,
       canDownloadCleanPDF: false,
       canUsePremiumFeatures: false,
+      isExpiredLocked: false,
       remainingSeconds: 0,
       reason: 'Compte suspendu par l’administration.'
     };
@@ -274,7 +276,9 @@ export function getCVPermissions(
 
   const now = Date.now();
   const cvExpiresMs = cv?.access?.expiresAt ? new Date(cv.access.expiresAt).getTime() : 0;
+  const hasPaidHistory = Boolean(cv?.access && cv.access.planCode !== 'free' && cv.access.expiresAt);
   const cvActive = Boolean(cv?.access?.status === 'active' && cvExpiresMs > now);
+  const isExpiredLocked = Boolean(hasPaidHistory && cvExpiresMs <= now);
 
   const subExpiresMs = user?.subscription?.expiresAt ? new Date(user.subscription.expiresAt).getTime() : 0;
   const subPaidActive = Boolean(
@@ -287,25 +291,25 @@ export function getCVPermissions(
   const maxCVs = currentPlan?.quotas?.maxCVs ?? (subPaidActive ? 15 : 5);
 
   const canCreateCV = userCVCount < maxCVs;
-  const canDownloadCleanPDF = cvActive || subPaidActive;
-  const remainingSeconds = cvActive
-    ? Math.max(0, Math.floor((cvExpiresMs - now) / 1000))
-    : subPaidActive
-    ? Math.max(0, Math.floor((subExpiresMs - now) / 1000))
-    : 0;
+  // Règle stricte : le téléchargement PDF sans filigrane est lié au CV précis acheté (aucun déblocage transversal d'un autre CV)
+  const canDownloadCleanPDF = cvActive;
+  // Règle Mission 5 : après expiration d'un forfait payant sur ce CV, les modifications exigent un nouveau paiement (les CV gratuits Découverte restent modifiables)
+  const canEditCV = !isExpiredLocked;
+  const remainingSeconds = cvActive ? Math.max(0, Math.floor((cvExpiresMs - now) / 1000)) : 0;
 
   return {
     canCreateCV,
-    canEditCV: true, // Les CV ne sont jamais supprimés ni verrouillés à l'édition après expiration
-    canDownloadPDF: true, // Export découverte avec filigrane toujours accessible
+    canEditCV,
+    canDownloadPDF: true, // Le CV n'est jamais supprimé ; la consultation/export avec filigrane reste possible
     canDownloadCleanPDF,
-    canUsePremiumFeatures: canDownloadCleanPDF,
+    canUsePremiumFeatures: cv ? cvActive : subPaidActive,
+    isExpiredLocked,
     remainingSeconds,
     reason: canDownloadCleanPDF
-      ? 'Accès premium actif : export PDF sans filigrane autorisé.'
-      : cv?.access?.expiresAt && cvExpiresMs <= now
-      ? 'Accès expiré : vos données et l’édition restent conservées, l’export comporte un filigrane.'
-      : 'Formule Découverte : édition conservée, export PDF avec filigrane.'
+      ? 'Accès premium actif sur ce CV : modification et export PDF sans filigrane autorisés.'
+      : isExpiredLocked
+      ? 'Accès expiré : votre CV est conservé intact en lecture seule. Un renouvellement Moov Money (500 ou 1 000 FCFA) est requis pour le modifier ou l’exporter sans filigrane.'
+      : 'Formule Découverte : création et édition gratuites (max 5 CV), export PDF avec filigrane.'
   };
 }
 

@@ -37,6 +37,15 @@ export interface CVAuditResult {
   isAI: boolean;
 }
 
+function getAIHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const tok = localStorage.getItem('cv_benin_auth_token');
+    if (tok) headers['Authorization'] = `Bearer ${tok}`;
+  }
+  return headers;
+}
+
 export async function enhanceWithAI(options: AIEnhanceOptions): Promise<AIEnhanceResult> {
   const { type, text = '', jobTitle = 'Professionnel', context = '', cvData } = options;
 
@@ -44,7 +53,7 @@ export async function enhanceWithAI(options: AIEnhanceOptions): Promise<AIEnhanc
   try {
     const response = await fetch('/api/ai/enhance', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAIHeaders(),
       body: JSON.stringify({ type, text, jobTitle, context, cvData })
     });
 
@@ -81,7 +90,7 @@ export async function analyzeJobMatch(cvData: CVData, jobOfferText: string): Pro
   try {
     const response = await fetch('/api/ai/job-match', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAIHeaders(),
       body: JSON.stringify({ cvData, jobOfferText })
     });
     if (response.ok) {

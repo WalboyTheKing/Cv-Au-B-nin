@@ -74,6 +74,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Données locales et synchronisation
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
 
@@ -123,19 +124,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const auditLogs: AuditLog[] = useMemo(() => storageService.getAuditLogs(), [refreshTrigger]);
   const plans: Plan[] = useMemo(() => storageService.getPlans(), [refreshTrigger]);
 
+  // --- SÉCURITÉ ADMINISTRATEUR ---
+  const isAdmin = currentUser?.role === 'admin';
+  const hasServerToken =
+    typeof window !== 'undefined' && Boolean(localStorage.getItem('cv_benin_auth_token'));
+
+  const syncFromServer = async () => {
+    if (!isAdmin || !hasServerToken) return;
+    setIsSyncing(true);
+    try {
+      const res = await storageService.syncAdminDataFromServer();
+      if (!res.success && res.error) {
+        if (res.error.includes('expirée') || res.error.includes('refusée')) {
+          setForceShowLoginForm(true);
+        }
+      }
+      setRefreshTrigger((prev) => prev + 1);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAdmin && hasServerToken && !forceShowLoginForm) {
+      syncFromServer();
+    }
+  }, [isAdmin, hasServerToken, forceShowLoginForm]);
+
   const reloadData = () => {
     setRefreshTrigger((prev) => prev + 1);
+    syncFromServer();
   };
 
   const showNotification = (msg: string) => {
     setActionMessage(msg);
     setTimeout(() => setActionMessage(null), 4500);
   };
-
-  // --- SÉCURITÉ ADMINISTRATEUR ---
-  const isAdmin = currentUser?.role === 'admin' && currentUser?.email === 'admin@cvprobenin.bj';
-  const hasServerToken =
-    typeof window !== 'undefined' && Boolean(localStorage.getItem('cv_benin_auth_token'));
 
   const getAdminAuthHeaders = (withJson = true): Record<string, string> => {
     const token =
@@ -365,40 +389,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: getAdminAuthHeaders(true),
         body: JSON.stringify({
           orderId: orderToApprove.id,
-          adminId: currentUser.id,
-          adminEmail: currentUser.email,
           checkAccount: true,
           checkAmount: true
         })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const apiData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !apiData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
-          setModalError(errData.error || 'Session administrateur expirée. Veuillez vous reconnecter.');
+          setModalError(apiData.error || 'Session administrateur expirée. Veuillez vous reconnecter.');
           setForceShowLoginForm(true);
           return;
         }
-        setModalError(errData.error || 'La validation a été refusée par le serveur.');
+        setModalError(apiData.error || 'La validation a été refusée par le serveur.');
         return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour approbation, synchronisation locale', e);
-    }
 
-    const res = storageService.approveManualOrder(
-      orderToApprove.id,
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj'
-    );
-
-    if (res.success) {
-      showNotification(`Commande ${orderToApprove.orderNumber} validée. Droits activés pour ${orderToApprove.userName}.`);
+      storageService.approveManualOrder(
+        orderToApprove.id,
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj'
+      );
+      showNotification(`Commande ${orderToApprove.orderNumber} validée côté serveur. Droits activés pour ${orderToApprove.userName}.`);
       setOrderToApprove(null);
       setCheckAccount(false);
       setCheckAmount(false);
       reloadData();
-    } else {
-      setModalError(res.error || "Erreur lors de la validation de la commande.");
+    } catch {
+      setModalError('Serveur inaccessible : impossible de valider la commande sans confirmation serveur.');
     }
   };
 
@@ -417,39 +434,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: getAdminAuthHeaders(true),
         body: JSON.stringify({
           orderId: orderToReject.id,
-          adminId: currentUser.id,
-          adminEmail: currentUser.email,
           reason: rejectionReason.trim()
         })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const apiData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !apiData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
-          setModalError(errData.error || 'Session administrateur expirée.');
+          setModalError(apiData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
           return;
         }
-        setModalError(errData.error || 'Le rejet a été refusé par le serveur.');
+        setModalError(apiData.error || 'Le rejet a été refusé par le serveur.');
         return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour rejet, synchronisation locale', e);
-    }
 
-    const res = storageService.rejectManualOrder(
-      orderToReject.id,
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj',
-      rejectionReason.trim()
-    );
-
-    if (res.success) {
+      storageService.rejectManualOrder(
+        orderToReject.id,
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj',
+        rejectionReason.trim()
+      );
       showNotification(`Commande ${orderToReject.orderNumber} rejetée avec motif.`);
       setOrderToReject(null);
       setRejectionReason('');
       reloadData();
-    } else {
-      setModalError(res.error || "Erreur lors du rejet de la commande.");
+    } catch {
+      setModalError('Serveur inaccessible : impossible de rejeter la commande.');
     }
   };
 
@@ -464,28 +474,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: getAdminAuthHeaders(true),
         body: JSON.stringify({ userId: userToSuspend.id, reason })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const errData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !errData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
           showNotification(errData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
           return;
         }
+        showNotification(errData.error || 'Erreur serveur lors de la suspension.');
+        return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour suspension', e);
-    }
 
-    storageService.suspendUser(
-      userToSuspend.id,
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj',
-      reason
-    );
-    showNotification(`Compte ${userToSuspend.email} suspendu avec succès.`);
-    setUserToSuspend(null);
-    setSuspensionReason('');
-    reloadData();
+      storageService.suspendUser(
+        userToSuspend.id,
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj',
+        reason
+      );
+      showNotification(`Compte ${userToSuspend.email} suspendu avec succès.`);
+      setUserToSuspend(null);
+      setSuspensionReason('');
+      reloadData();
+    } catch {
+      showNotification('Serveur inaccessible : échec de la suspension.');
+    }
   };
 
   const handleReactivateUser = async (user: UserProfile) => {
@@ -495,25 +507,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: getAdminAuthHeaders(true),
         body: JSON.stringify({ userId: user.id })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const errData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !errData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
           showNotification(errData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
           return;
         }
+        showNotification(errData.error || 'Erreur serveur lors de la réactivation.');
+        return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour réactivation', e);
-    }
 
-    storageService.reactivateUser(
-      user.id,
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj'
-    );
-    showNotification(`Compte ${user.email} réactivé.`);
-    reloadData();
+      storageService.reactivateUser(
+        user.id,
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj'
+      );
+      showNotification(`Compte ${user.email} réactivé.`);
+      reloadData();
+    } catch {
+      showNotification('Serveur inaccessible : échec de la réactivation.');
+    }
   };
 
   const handleDeleteUserSubmit = async () => {
@@ -524,27 +538,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: getAdminAuthHeaders(true),
         body: JSON.stringify({ userId: userToDelete.id })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const errData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !errData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
           showNotification(errData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
           return;
         }
+        showNotification(errData.error || 'Suppression refusée par le serveur.');
+        return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour suppression utilisateur', e);
-    }
 
-    storageService.deleteUserAdmin(
-      userToDelete.id,
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj'
-    );
-    showNotification(`Compte ${userToDelete.email} supprimé définitivement.`);
-    setUserToDelete(null);
-    setSelectedUserForDetail(null);
-    reloadData();
+      storageService.deleteUserAdmin(
+        userToDelete.id,
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj'
+      );
+      showNotification(`Compte ${userToDelete.email} supprimé définitivement.`);
+      setUserToDelete(null);
+      setSelectedUserForDetail(null);
+      reloadData();
+    } catch {
+      showNotification('Serveur inaccessible : échec de la suppression.');
+    }
   };
 
   const handleSaveEditUser = async () => {
@@ -560,27 +576,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           phoneNumber: editPhone
         })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const errData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !errData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
           showNotification(errData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
           return;
         }
+        showNotification(errData.error || 'Erreur serveur lors de la mise à jour.');
+        return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour mise à jour utilisateur', e);
-    }
 
-    storageService.updateUserProfileAdmin(
-      userToEdit.id,
-      { firstName: editFirstName, lastName: editLastName, phoneNumber: editPhone },
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj'
-    );
-    showNotification(`Informations de ${userToEdit.email} mises à jour.`);
-    setUserToEdit(null);
-    reloadData();
+      storageService.updateUserProfileAdmin(
+        userToEdit.id,
+        { firstName: editFirstName, lastName: editLastName, phoneNumber: editPhone },
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj'
+      );
+      showNotification(`Informations de ${userToEdit.email} mises à jour.`);
+      setUserToEdit(null);
+      reloadData();
+    } catch {
+      showNotification('Serveur inaccessible : mise à jour non enregistrée.');
+    }
   };
 
   // --- ATTRIBUTION MANUELLE DE FORFAIT ---
@@ -603,8 +621,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           reason: grantReason.trim()
         })
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const errData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !errData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
           setModalError(errData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
@@ -613,25 +631,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setModalError(errData.error || "Erreur serveur lors de l'attribution.");
         return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour attribution', e);
+
+      storageService.grantManualAccess(
+        grantUserId || 'guest_user',
+        grantPlanCode,
+        grantReason.trim(),
+        currentUser.id || 'admin_master',
+        currentUser.email || 'admin@cvprobenin.bj',
+        grantCVId || undefined
+      );
+
+      showNotification(`Accès ${grantPlanCode === 'career_30d' ? '30 jours' : '24 heures'} attribué avec succès.`);
+      setGrantModalOpen(false);
+      setGrantReason('');
+      setGrantCVId('');
+      setGrantUserId('');
+      reloadData();
+    } catch {
+      setModalError('Serveur inaccessible : attribution refusée.');
     }
-
-    storageService.grantManualAccess(
-      grantUserId || 'guest_user',
-      grantPlanCode,
-      grantReason.trim(),
-      currentUser.id || 'admin_master',
-      currentUser.email || 'admin@cvprobenin.bj',
-      grantCVId || undefined
-    );
-
-    showNotification(`Accès ${grantPlanCode === 'career_30d' ? '30 jours' : '24 heures'} attribué avec succès.`);
-    setGrantModalOpen(false);
-    setGrantReason('');
-    setGrantCVId('');
-    setGrantUserId('');
-    reloadData();
   };
 
   // --- SUPPRESSION DE CV PAR L'ADMIN ---
@@ -642,30 +660,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         method: 'DELETE',
         headers: getAdminAuthHeaders(false)
       });
-      if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
+      const errData = await apiRes.json().catch(() => ({}));
+      if (!apiRes.ok || !errData.success) {
         if (apiRes.status === 401 || apiRes.status === 403) {
           showNotification(errData.error || 'Session administrateur expirée.');
           setForceShowLoginForm(true);
           return;
         }
+        showNotification(errData.error || 'Suppression refusée par le serveur.');
+        return;
       }
-    } catch (e) {
-      console.warn('Serveur non joignable pour suppression CV', e);
+
+      storageService.deleteCV(cvToDelete.id);
+      storageService.addAuditLog({
+        actorId: currentUser.id || 'admin_master',
+        actorEmail: currentUser.email || 'admin@cvprobenin.bj',
+        action: `Suppression administrative du CV ${cvToDelete.id} (${cvToDelete.title})`,
+        resourceType: 'cv',
+        resourceId: cvToDelete.id
+      });
+
+      showNotification(`CV ${cvToDelete.title} supprimé.`);
+      setCVToDelete(null);
+      reloadData();
+    } catch {
+      showNotification('Serveur inaccessible : suppression non effectuée.');
     }
-
-    storageService.deleteCV(cvToDelete.id);
-    storageService.addAuditLog({
-      actorId: currentUser.id || 'admin_master',
-      actorEmail: currentUser.email || 'admin@cvprobenin.bj',
-      action: `Suppression administrative du CV ${cvToDelete.id} (${cvToDelete.title})`,
-      resourceType: 'cv',
-      resourceId: cvToDelete.id
-    });
-
-    showNotification(`CV ${cvToDelete.title} supprimé.`);
-    setCVToDelete(null);
-    reloadData();
   };
 
   return (
@@ -684,7 +704,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </span>
             </div>
             <p className="text-[10px] text-slate-400">
-              Session certifiée : <span className="font-mono text-slate-300">admin@cvprobenin.bj</span>
+              Session certifiée : <span className="font-mono text-slate-300">{currentUser.email}</span>
+              {isSyncing && <span className="ml-2 text-amber-400">• Synchronisation...</span>}
             </p>
           </div>
         </div>
@@ -2007,7 +2028,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <label className="block text-slate-400 mb-1">Candidat destinataire :</label>
                 <select
                   value={grantUserId}
-                  onChange={(e) => setGrantUserId(e.target.value)}
+                  onChange={(e) => {
+                    setGrantUserId(e.target.value);
+                    setGrantCVId('');
+                  }}
                   className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white outline-none cursor-pointer"
                 >
                   <option value="">Sélectionner un candidat...</option>
@@ -2018,6 +2042,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   ))}
                 </select>
               </div>
+
+              {grantUserId && (
+                <div>
+                  <label className="block text-slate-400 mb-1">CV précis à débloquer (facultatif) :</label>
+                  <select
+                    value={grantCVId}
+                    onChange={(e) => setGrantCVId(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white outline-none cursor-pointer"
+                  >
+                    <option value="">Premier CV du candidat</option>
+                    {allCVs
+                      .filter((c) => c.userId === grantUserId)
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.title} ({c.id})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-slate-400 mb-1">Forfait à accorder :</label>
